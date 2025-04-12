@@ -14,13 +14,19 @@ pub fn test() {
     // 176
     // 946
     // 2333
-    // sum
+    // avg
     // ";
-    let s = "31 cnt& cnt";
-    let ss = s.to_string().as_str();
-    let s = "fn f x y = \r\n(x+y \r\n dddd) ";
-
+    // let s = r"
+    // 16 32
+    // avg
+    // ";
+    // let s = "31 cnt& cnt";
+    // let ss = s.to_string().as_str();
+    let s = "fn f x=x \n f 1";
+    let s = "fn f2 x = x*7 \n 2 f2& + 3 sum";
+    // let s = "\r";
     // let s = "sum 2 3 4";
+    
     let s = s.chars().collect::<Box<[char]>>();
     let s = s.as_ref();
     // println!("====== {s:?}");
@@ -28,15 +34,35 @@ pub fn test() {
     // let vv = parse_number(s);
     // let Some(vv) = parse_symbol(s) else {return};
     // let vv = skip_blank_back(s);
-    let vv = parse_fn(s);
-    // let vv = parse(s);
+    // let vv = parse_fn(s);
+    let vv = parse(s);
     println!("==={vv:?}");
 }
 
+fn parse_fn_exp(fn_def: Fndef, data:&[Et])->Option<Et> {
+    let mut context = Context {
+        frame_stack: Vec::<Frame>::new(),
+        symbols: BTreeMap::new(),
+        fn_codes: BTreeMap::new(),
+    };
+    context.frame_stack.push(Frame::new());
+
+    assert_eq!(data.len(), fn_def.ps.len(),"count of virtual params is not eq to count of real params");
+    let src = fn_def.body.as_slice();
+
+    // 把参数写入
+    let pd_iter = data.iter().zip(fn_def.ps.iter());
+    for (v,name) in pd_iter {
+        context.symbols.insert(name.clone(),*v);
+    }
+    let vv = parse_exp(&mut context, src);
+    vv
+}
 fn parse(src:&[char])->Option<Et> {
     let mut context = Context {
         frame_stack: Vec::<Frame>::new(),
         symbols: BTreeMap::new(),
+        fn_codes: BTreeMap::new(),
     };
     context.frame_stack.push(Frame::new());
 
@@ -58,7 +84,7 @@ fn parse_exp(context: &mut Context, src: &[char])->Option<Et> {
         let mut frame = frame_stack.last_mut().unwrap();
         let frame_empty = frame.data.is_empty() && frame.opi.is_empty();
 
-        let Some((ut, src_rest)) = unit_next(src,frame_empty) else {
+        let Some((ut, src_rest)) = unit_next(src,frame_empty,&context.fn_codes) else {
             // error
             return None;
         };
@@ -76,11 +102,11 @@ fn parse_exp(context: &mut Context, src: &[char])->Option<Et> {
                 if  frame.opi.last().is_none() ||
                     frame.opi.last().unwrap().0.prinum < e.prinum
                 {
-                    println!("++++>action: {:?} {:?}",e.name, src_rest);
+                    println!("++++> op : {:?} {:?}",e.name, src_rest);
                     src = src_rest;
                     push_action((e.clone(),kind), &mut frame.opi);
                     // 左目运算符，只和左边有关系，必须要执行
-                    // 这个和有误返回值没有关系啦，统一了，;也统一了
+                    // 这个和有无返回值没有关系啦，统一了，;也统一了
                     if let DataWhere::Left(_) = e.data_where {
                         Some(e.prinum)
                     } else {
@@ -100,6 +126,7 @@ fn parse_exp(context: &mut Context, src: &[char])->Option<Et> {
                 frame = frame_stack.last_mut().unwrap();
                 None
             }
+
             Ut::Pr(Pri::RBracket) => {
                 src = src_rest;
                 println!("=====> ****** {src:?}");
@@ -112,6 +139,20 @@ fn parse_exp(context: &mut Context, src: &[char])->Option<Et> {
                 push_data(Data::Sym(sym), &mut frame.data);
                 None
             }
+
+            Ut::Fndef(fn_def) => {
+                src = src_rest;
+                println!("++++> CODE {:?} {:?}",fn_def, src_rest);
+                push_code(fn_def,&mut context.fn_codes);
+                None
+            }
+
+            // Ut::Fn(fn_name, kind) => {
+            //     src = src_rest;
+            //     println!("++++> fn {:?}",fn_name);
+
+            //     None
+            // }
 
             // Ut::Assign => {
             //     src = &src[1..];
@@ -128,10 +169,17 @@ fn parse_exp(context: &mut Context, src: &[char])->Option<Et> {
         };
 
         if let Some(prinum) = r {
-            try_pop_exp_util(&mut context.symbols,frame, prinum.clone());
+            try_pop_exp_util(&context.fn_codes,&mut context.symbols,frame, prinum.clone());
             if prinum == PriNum::Zero && frame.opi.is_empty() {
                 // assert_eq!(frame.data.len(),1);
-                let vv = frame.data.last().cloned();
+                let mut vv = frame.data.last().cloned();
+                if let Some(Data::Sym(ref d)) = vv {
+                    // assure the value poped out must be val instead of sym
+                    // ******
+                    vv = Some(Data::Val(context.symbols[d]));
+                }
+
+                // let vv = value_of(&context.symbols, vv);
                 frame_stack.pop();
                 if let Some(last_frame) = frame_stack.last_mut() {
                     if let Some(vv) = vv {
@@ -162,7 +210,7 @@ fn get_w(c:char, w:&[We])->Option<We> {
     let r = r.map(|e|*e);
     r
 }
-#[derive(PartialEq,Debug,Clone, Copy)]
+#[derive(PartialEq,Debug,Clone,Copy)]
 enum CT { Digit, Weight, }
 fn ct(c:char)->Option<(CT,i32,i32)> {
     if c.is_ascii_digit() {
@@ -434,6 +482,15 @@ enum Et {
 }
 type SymbolMap = BTreeMap<String,Et>;
 
+impl Et {
+    fn as_i32(&self)->&i32 {
+        let Et::I32(v) = self else {
+            panic!("the type is not supported");
+        };
+        v
+    }
+}
+
 #[derive(Clone)]
 enum Act {
     Add(fn(&SymbolMap,&[Data])->Et),
@@ -442,7 +499,8 @@ enum Act {
     Div(fn(&SymbolMap,&[Data])->Et),
     Ass(fn(&mut SymbolMap,&[Data])->Et),
     NoRet(fn(&[Data])),
-    Fn(fn(&mut SymbolMap,&[Data])->Et), // 自定义函数
+    Opfn(fn(&mut SymbolMap,&[Data])->Et), // 系统内定义函数
+    Fn(fn(&str,&FnCodeMap,&SymbolMap,&[Data])->Et),
 }
 impl Act {
     fn cal2(&self,symbol:&SymbolMap,d:&[Data]) -> Et {
@@ -454,7 +512,7 @@ impl Act {
             _ => panic!(""),
         }
     }
-    fn call2_mut(&self,symbol:&mut SymbolMap,d:&[Data]) -> Et {
+    fn call(&self,symbol:&mut SymbolMap,d:&[Data]) -> Et {
         match self {
             Act::Add(f)
             |Act::Sub(f)
@@ -470,9 +528,15 @@ impl Act {
             _ => panic!(),
         }
     }
-    fn call_slice(&self,symbol:&mut SymbolMap,d:&[Data])->Et {
+    fn call_opfn(&self,symbol:&mut SymbolMap,d:&[Data])->Et {
         match self {
-            Act::Fn(f) => f(symbol,d),
+            Act::Opfn(f) => f(symbol,d),
+            _ => unreachable!(),
+        }
+    }
+    fn call_fn(&self,name:&str,codes:&FnCodeMap,symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
+        match self {
+            Act::Fn(f) => f(name,codes,symbol,d),
             _ => unreachable!(),
         }
     }
@@ -487,7 +551,7 @@ const PRI_UT: [(char, Ut); 2] = [
     (')', Ut::Pr(Pri::RBracket))
 ];
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy,Debug)]
 enum Para {
     Consumed,
     Ref,
@@ -499,6 +563,8 @@ enum Ut {
     Op(Opi,Para),
     Pr(Pri),
     Sy(String),
+    Fndef(Fndef),
+    // Fn(String,Para),
     End
 }
 
@@ -521,15 +587,21 @@ enum PriNum {
     Four, // (
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum Ret {
     Value,
     None,
 }
 
+#[derive(Clone,Debug)]
+enum Sym {
+    Str(&'static[char]),
+    String(String),
+}
+
 #[derive(Clone)]
 struct Opi {
-    name: &'static[char],
+    name: Sym,//&'static[char],
     act: Act,
     prinum: PriNum,
     data_where: DataWhere,
@@ -537,7 +609,7 @@ struct Opi {
     pred: char, // data
 }
 impl Opi {
-    const fn new(name:&'static[char], act:Act, prinum: PriNum, data_where:DataWhere, ret:Ret)->Self {
+    const fn new(name:Sym, act:Act, prinum: PriNum, data_where:DataWhere, ret:Ret)->Self {
         Self {name, act, prinum,data_where, ret, pred:' '}
     }
 }
@@ -654,31 +726,56 @@ fn no_return(_:&[Data]) {
 
 fn sum (symbol:&mut BTreeMap<String,Et>,data:&[Data])->Et {
     let r = data.iter().map(
-        |e|
-        match e {
-            Data::Sym(e) =>
-                if let Et::I32(e) = symbol[e] {e} else {panic!()},
-            Data::Val(e) =>
-                if let Et::I32(e) = e {*e} else {panic!()},
-        } 
+        |d| *value_of(symbol, d).as_i32()
     ).sum::<i32>();
     Et::I32(r)
 }
 
-fn cnt (_symbol:&mut BTreeMap<String,Et>,data:&[Data])->Et {
+fn cnt (symbol:&mut BTreeMap<String,Et>,data:&[Data])->Et {
     Et::I32(data.len() as i32)
 }
 
+fn avg (symbol:&mut BTreeMap<String,Et>,data:&[Data])->Et {
+    let Et::I32(sum) = sum(symbol,data) else {
+        panic!("not supports non i32");
+    };
+    let n = data.len() as i32;
+    Et::I32(sum/n)
+}
 
-const OPS:[Opi;8] = [
-    Opi::new(&['+'],Act::Add(add),PriNum::Two,DataWhere::Any(2),Ret::Value),
-    Opi::new(&['-'],Act::Sub(sub),PriNum::Two,DataWhere::Any(2),Ret::Value),
-    Opi::new(&['*'],Act::Mul(mul),PriNum::Three,DataWhere::Any(2),Ret::Value),
-    Opi::new(&['/'],Act::Div(div),PriNum::Three,DataWhere::Any(2),Ret::Value),
-    Opi::new(&['='],Act::Ass(assign),PriNum::One,DataWhere::Any(2),Ret::Value),
-    Opi::new(&[';'],Act::NoRet(no_return),PriNum::One,DataWhere::Left(1),Ret::None),
-    Opi::new(&['s','u','m'],Act::Fn(sum),PriNum::Four,DataWhere::Any(-1),Ret::Value),
-    Opi::new(&['c','n','t'],Act::Fn(cnt),PriNum::Four,DataWhere::Any(-1),Ret::Value),
+fn fn_def(src:&[char])->Option<(&[char],&[char])> {
+    let Some((_name,ref _ps,body, rest)) = parse_fn(src) else {
+        return None;
+    };
+    Some((body, rest))
+}
+
+fn fn_do(fn_name:&str,codes:&FnCodeMap,symbol:&BTreeMap<String,Et>,data:&[Data])->Et {
+    let mut ps = Vec::new();
+    for d in data {
+        let v = value_of(symbol, d);
+        ps.push(v);
+    }
+    let fn_def = codes[fn_name].clone();
+    let ps = ps.as_slice();
+    let Some(et) = parse_fn_exp(fn_def, ps) else {
+        panic!("run cracked");
+    };
+    et
+}
+
+
+const OPS:[Opi;9] = [
+    Opi::new(Sym::Str(&['+']),Act::Add(add),PriNum::Two,DataWhere::Any(2),Ret::Value),
+    Opi::new(Sym::Str(&['-']),Act::Sub(sub),PriNum::Two,DataWhere::Any(2),Ret::Value),
+    Opi::new(Sym::Str(&['*']),Act::Mul(mul),PriNum::Three,DataWhere::Any(2),Ret::Value),
+    Opi::new(Sym::Str(&['/']),Act::Div(div),PriNum::Three,DataWhere::Any(2),Ret::Value),
+    Opi::new(Sym::Str(&['=']),Act::Ass(assign),PriNum::One,DataWhere::Any(2),Ret::Value),
+    Opi::new(Sym::Str(&[';']),Act::NoRet(no_return),PriNum::One,DataWhere::Left(1),Ret::None),
+    Opi::new(Sym::Str(&['s','u','m']),Act::Opfn(sum),PriNum::Two,DataWhere::Any(-1),Ret::Value),
+    Opi::new(Sym::Str(&['c','n','t']),Act::Opfn(cnt),PriNum::Three,DataWhere::Any(-1),Ret::Value),
+    Opi::new(Sym::Str(&['a','v','g']),Act::Opfn(avg),PriNum::Two,DataWhere::Any(-1),Ret::Value),
+    // Opi::new(&['f','n'],Act::FnDef(fn_def),PriNum::Four,DataWhere::Zero,Ret::None),
     ];
 
 #[derive(Clone,Debug)]
@@ -717,37 +814,34 @@ fn is_char_or_digit(c:char)->bool {
     }
 }
 
-#[cfg(never)]
-fn which(c:char)->Option<Ut> {
-    fn opof(c:char)->Option<Opi> {
-        let r = OPS.iter().find(|e|e.name[0] == c);
-        let r = r.cloned();
-        r
-    }
-
-    if DIGITS.contains(&c) {
-        Some(Ut::Ni)
-    } else if let Some(opi) = opof(c) {
-        Some(Ut::Op(opi))
-    } else if c == '(' {
-        Some(Ut::Pr(Pri::LBracket))
-    } else if c == ')' {
-        Some(Ut::Pr(Pri::RBracket))
-    } else if is_char(c) {
-        Some(Ut::Sy)
-    } else {
-        None
-    }
-}
 const SKIP_CHARS:[char;3] = [' ','\r','\n'];
 
 struct Unit<'a> {
     ut: Ut,
     src_next: &'a[char],
-    
 }
 
-fn unit_next(src:&[char], frame_empty:bool)->Option<(Ut,&[char])> {
+impl Sym {
+    fn as_static_slice(&self)->&'static[char] {
+        let Sym::Str(s) = self else {
+            panic!("not static char slice");
+        };
+        s
+    }
+    fn as_str(&self)->&str {
+        let Sym::String(s) = self else {
+            panic!("not static char slice");
+        };
+        s.as_str()
+    }
+    fn len(&self)->usize {
+        match self {
+            Sym::Str(s) => s.len(),
+            Sym::String(s) => s.len(),
+        }
+    }
+}
+fn unit_next<'a>(src:&'a[char], frame_empty:bool,codes:&FnCodeMap)->Option<(Ut,&'a[char])> {
     // skip ignored char
     let (src,Some(ref c)) = skip_blank(src) else {
         return Some((Ut::End,src));
@@ -769,7 +863,7 @@ fn unit_next(src:&[char], frame_empty:bool)->Option<(Ut,&[char])> {
             return Some((Ut::Ni(Et::I32(ni)),src_rest));
         }
     // <2> +-*/=;sum cnt
-    } if let Some(op) = OPS.iter().find(|e|src.starts_with(e.name)) {
+    } if let Some(op) = OPS.iter().find(|e|src.starts_with(e.name.as_static_slice())) {
         assert!(src.len()>=op.name.len());
         let name_len = op.name.len();
         let kind = if let Some('&') = src.get(name_len) {
@@ -782,11 +876,42 @@ fn unit_next(src:&[char], frame_empty:bool)->Option<(Ut,&[char])> {
     } else if let Some((_,ut)) = PRI_UT.iter().find(|e|e.0==*c) {
         assert!(src.len()>=1);
         return Some((ut.clone(),&src[1..]))
-    // <4> symbol
+    // <4|5|6> symbol | fndef | fn
     } else if UPPER_CHARS.contains(c) || LOWER_CHARS.contains(c) {
         if let Some((sym,src_rest)) = parse_symbol(src) {
+            // <5> fn def
+            if let ['f','n'] = sym {
+                let Some((name,ps,body,src_rest)) = parse_fn(src) else {
+                    return None;
+                };
+                let name = name.iter().collect::<String>();
+                let ps = ps.iter().map(|e|e.iter().collect::<String>()).collect();
+                let body = body.to_vec();
+                let fn_def = Fndef {name,ps,body};
+                return Some((Ut::Fndef(fn_def),src_rest));
+            }
+
             let sym = sym.iter().collect::<String>();
-            return Some((Ut::Sy(sym),src_rest));
+            let fn_def = codes.get(&sym);
+
+            // <4> symbol
+            let Some(fn_def) = fn_def else {
+                return Some((Ut::Sy(sym),src_rest));
+            };
+
+            // <6> fn
+            let kind = if let Some('&') = src_rest.first() {
+                (Para::Ref,1)
+            } else {
+                (Para::Consumed,0)
+            };
+            let fn_name = Sym::String(sym);
+            let fn_dw = DataWhere::Any(fn_def.ps.len() as i32);
+            const FN_PRINUM: PriNum = PriNum::Four;
+            const FN_DO: Act = Act::Fn(fn_do);
+            const FN_RET: Ret = Ret::Value;
+            let fn_opi = Opi::new(fn_name, FN_DO, FN_PRINUM, fn_dw, FN_RET);
+            return Some((Ut::Op(fn_opi, kind.0),&src_rest[kind.1..]));
         }
     }
     // Error, we canot diagonise
@@ -799,73 +924,100 @@ fn push_data(v:Data, stack: &mut Vec<Data>) {
 fn push_action(opi:(Opi,Para), stack: &mut Vec<(Opi,Para)>) {
     stack.push(opi);
 }
+fn push_code(fn_def:Fndef, codes:&mut FnCodeMap) {
+    codes.insert(fn_def.name.clone(), fn_def);
+}
 
-fn try_pop_exp_util(symbol:&mut SymbolMap,frame: &mut Frame, prinum:PriNum) {
+fn try_pop_exp_util(codes:&FnCodeMap,symbol:&mut SymbolMap,frame: &mut Frame, prinum:PriNum) {
     while let Some(last_op) = frame.opi.last() {
         if last_op.0.prinum >= prinum {
-            pop_exp(symbol,frame);
+            pop_exp(codes,symbol,frame);
         } else {
             break;
         }
     }
 }
-fn pop_exp(symbol:&mut SymbolMap,frame: &mut Frame) {
+fn pop_exp(codes:&FnCodeMap,symbol:&mut SymbolMap,frame: &mut Frame) {
     let Some(opi) = frame.opi.pop() else {
         return;
     };
-    match opi.0.ret {
-        Ret::Value => {
-            match opi.0.data_where {
-                DataWhere::Any(2) => {
-                    let len = frame.data.len();
-                    let d = frame.data.get(len-2..len).unwrap();
-                    // let d2 = frame.data.pop().unwrap();
-                    // let d1 = frame.data.pop().unwrap();
-                    println!("      {:?}({d:?})",opi.0.name);
-                    let d3 = opi.0.act.call2_mut(symbol, d);
-                    if let Para::Consumed = opi.1 {
-                        frame.data.pop().unwrap();
-                        frame.data.pop().unwrap();
-                    }
-                    if let Ret::Value = opi.0.ret {
-                        frame.data.push(Data::Val(d3));
-                    }
-                }
-                DataWhere::Any(-1) => {
-                    let d = frame.data.as_slice();
-                    let d3 = opi.0.act.call_slice(symbol, d);
-                    println!("      {:?}({d:?})",opi.0.name);
-                    if let Para::Consumed = opi.1 {
-                        frame.data.clear();
-                    }
-                    if let Ret::Value = opi.0.ret {
-                        frame.data.push(Data::Val(d3));
-                    }
-                }
-                _ => {}
-            }
+    println!("\t~~~~~~~ acton:{:?} ~~~~~~~>", opi.0.name);
+    println!("\t0:{:?}",frame.data);
+    let d;
+    match opi.0.data_where {
+        DataWhere::Zero => todo!(),
+        DataWhere::Any(-1) => {
+            d = frame.data.as_slice();
+            // println!("\t1:param cnt: {0}/{0}",d.len());
         }
-        Ret::None => {
-            match opi.0.data_where {
-                DataWhere::Left(1) => {
-                    let len = frame.data.len();
-                    let d = frame.data.get(len-1..len).unwrap();
-                    println!("      {:?}({d:?})",opi.0.name);
-                    let _d = opi.0.act.call_noret(d);
-                    if let Para::Consumed = opi.1 {
-                        frame.data.pop().unwrap();
-                    }
-                }
-                _ => {}
-            }
+        DataWhere::Any(n) | DataWhere::Left(n)=> {
+            let n = n as usize;
+            let len = frame.data.len();
+            // println!("\t2:param cnt: {n}/{}",len);
+            d = frame.data.get(len-n..len).unwrap();
+        }
+        DataWhere::Right(_) => todo!(),
+        DataWhere::Both(_, _) => todo!(),
+        DataWhere::Mid(_) => todo!(),
+    }
+
+    let d3; // return value
+    match opi.0.act {
+        Act::Add(_)|Act::Sub(_)|Act::Mul(_)|Act::Div(_)|Act::Ass(_) => {
+            d3 = Some(opi.0.act.call(symbol, d));
+        }
+        Act::Opfn(_) => {
+            d3 = Some(opi.0.act.call_opfn(symbol, d));
+        }
+        Act::Fn(_) => {
+            // HERE, happens cracked, when we call name.str
+            // let Sym::String(ref name) = opi.0.name else {
+            //     panic!("the name is not String");
+            // };
+            let Sym::String(name) = opi.0.name else {
+                panic!("the name is not String");
+            };
+            let name = name.as_str();
+            d3 = Some(opi.0.act.call_fn(name, codes, symbol, d));
+        }
+        Act::NoRet(_) => {
+            // println!("      {:?}({d:?})",opi.0.name);
+            let _d = opi.0.act.call_noret(d);
+            d3 = None;
+        }
+        // _ => {unreachable!();}
+    }
+
+    // println!("\t4:{:?} pop {}",opi.1,d.len());
+    // pop param if necessary
+    if let Para::Consumed = opi.1 {
+        for _ in 0..d.len() {
+            frame.data.pop().unwrap();
         }
     }
+
+    // return value
+    // println!("\t5:={:?} {:?}",d3,opi.0.ret);
+    if let Ret::Value = opi.0.ret {
+        if let Some(d3) = d3 {
+            frame.data.push(Data::Val(d3));
+        }
+    }
+
+    // println!("\t~~~~~~~~ 6:{:?}",frame.data);
 }
 
-
+#[derive(Clone,Debug)]
+struct Fndef {
+    name: String,
+    ps: Vec<String>,
+    body: Vec<char>,
+}
+type FnCodeMap = BTreeMap<String,Fndef>;
 struct Context {
     frame_stack: Vec<Frame>,
-    symbols: SymbolMap
+    symbols: SymbolMap,
+    fn_codes: FnCodeMap
 }
 
 
