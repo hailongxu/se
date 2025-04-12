@@ -18,7 +18,7 @@ pub fn test() {
     // ";
     let s = "31 cnt& cnt";
     let ss = s.to_string().as_str();
-    // let s = "fn f x y = x+y";
+    let s = "fn f x y = \r\n(x+y \r\n dddd) ";
 
     // let s = "sum 2 3 4";
     let s = s.chars().collect::<Box<[char]>>();
@@ -27,9 +27,9 @@ pub fn test() {
     // let a = &s[3];
     // let vv = parse_number(s);
     // let Some(vv) = parse_symbol(s) else {return};
-    // let vv = parse_fn(s);
-
-    let vv = parse(s);
+    // let vv = skip_blank_back(s);
+    let vv = parse_fn(s);
+    // let vv = parse(s);
     println!("==={vv:?}");
 }
 
@@ -296,6 +296,24 @@ fn parse_symbol(src:&[char])->Option<(&[char],&[char])> {
     Some((&chars[..index_next],&chars[index_next..]))
 }
 
+fn skip_space_back(src:&[char])->(&[char],Option<char>) {
+    let Some(p) = src.iter().rev().position(|e|*e!=' ') else {
+        // 没有非空格
+        return (&[],None);
+    };
+    assert!(p>=0);
+    (&src[..src.len()-p],Some(src[src.len()-p-1]))
+}
+
+fn skip_blank_back(src:&[char])->(&[char],Option<char>) {
+    let Some(p) = src.iter().rev().position(|e|!SKIP_CHARS.contains(e)) else {
+        // 没有非空格
+        return (&[],None);
+    };
+    assert!(p>=0);
+    (&src[..src.len()-p],Some(src[src.len()-p-1]))
+}
+
 fn skip_blank(src:&[char])->(&[char],Option<char>) {
     let mut index_next = 0;
     let mut char_next = None;
@@ -315,7 +333,8 @@ fn skip_blank(src:&[char])->(&[char],Option<char>) {
     (src, char_next)
 }
 
-fn parse_fn(src:&[char])->Option<(&[char],Vec<&[char]>,&[char])> {
+fn parse_fn(src:&[char])->Option<(&[char],Vec<&[char]>,&[char],&[char])> {
+    // const END_CHARS: [char; 2] = ['\r','\n'];
 
     let (src,_char_next) = skip_blank(src);
 
@@ -342,10 +361,70 @@ fn parse_fn(src:&[char])->Option<(&[char],Vec<&[char]>,&[char])> {
         return None;
     };
 
-    let body = &src[1..];
-    let (body,_char) = skip_blank(body);
+    // body
+    let src = &src[1..];
 
-    Some((name, ps, body))
+    let (src,Some(c0)) = skip_blank(src) else {
+        assert!(src.is_empty());
+        return Some((name, ps, src, src));
+    };
+
+    // println!("[{c0}]  {src:?}");
+
+    let mut bracket_cnt = 0;
+    let mut last_c = None;
+    let is_first_bracket = c0=='(';
+
+    let mut index_next = 0;
+    for c in src {
+        index_next += 1;
+        match c {
+            '(' =>
+                bracket_cnt+=1,
+            ')' => {
+                bracket_cnt-=1;
+                if bracket_cnt == 0 && is_first_bracket {
+                    last_c = Some(c);
+                    break;
+                }
+                if bracket_cnt<0 {
+                    return None;
+                }
+            }
+            '\r'|'\n' => 
+                if bracket_cnt == 0 {
+                    last_c = Some(c);
+                    break;
+                }
+            _ => (),
+        }
+    }
+
+    if last_c.is_none() && !is_first_bracket {
+        let body = &src[..index_next];
+        let rest = &src[index_next..];
+        let (body,_char) = skip_space_back(body);
+        return Some((name,ps,body,rest));
+    }
+
+    let Some(last_c) = last_c else {
+        return None;
+    };
+
+    if is_first_bracket && *last_c != ')' {
+        return None;
+    }
+    
+    let indent_cnt = is_first_bracket as usize;
+    let body_start = indent_cnt;
+    let body_end = index_next-indent_cnt;
+    let body = &src[body_start..body_end];
+    let rest = &src[body_end..];
+
+    let (body,_) = skip_blank(body);
+    let (body,_) = skip_blank_back(body);
+
+    Some((name, ps, body, rest))
 }
 
 #[derive(Clone, Copy,Debug)]
@@ -669,21 +748,6 @@ struct Unit<'a> {
 }
 
 fn unit_next(src:&[char], frame_empty:bool)->Option<(Ut,&[char])> {
-    // let mut src = src;
-
-    // // skip ignored char
-    // let c = loop {
-    //     let Some(c) = src.first() else {
-    //         // <5> END
-    //         return Some((Ut::End,&src[0..0]));
-    //     };
-    //     if SKIP_CHARS.contains(c) {
-    //         src = &src[1..];
-    //     } else {
-    //         break c;
-    //     }
-    // };
-
     // skip ignored char
     let (src,Some(ref c)) = skip_blank(src) else {
         return Some((Ut::End,src));
