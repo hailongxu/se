@@ -1,9 +1,33 @@
-
 use std::collections::BTreeMap;
 
+#[test]
+fn test_enun_next() {
+    const fn next_pri(p:PriNum)->PriNum {
+        match p {
+            PriNum::P0 => PriNum::P1,
+            PriNum::P1 => PriNum::P2,
+            PriNum::P2 => PriNum::P3,
+            PriNum::P3 => PriNum::P4,
+            PriNum::P4 => PriNum::P5,
+            PriNum::P5 => PriNum::P5,
+            PriNum::P6 => PriNum::P7,
+            PriNum::P7 => PriNum::P8,
+            PriNum::P8 => PriNum::P9,
+            PriNum::P9 => PriNum::P10,
+            PriNum::P10 => unreachable!(),
+        }
+    }
+    const a:PriNum=PriNum::P9;
+    const BB: [PriNum;2] = [{a},next_pri(a)];
+}
 
 #[test]
 pub fn test() {
+    if f32::NAN == f32::NAN {
+        println!("==> NaN == NaN");
+    } else {
+        println!("==> NaN != NaN");
+    }
 
     // let s = "1万3百20";
     // let s = "-5 * ( ( -3 + 6 ) )";
@@ -23,7 +47,7 @@ pub fn test() {
     // let s = "31 cnt& cnt";
     // let ss = s.to_string().as_str();
     let s = "fn f x=x \n f 1";
-    let s = "fn f2 x = x*7 \n 2 f2& + 3 sum";
+    let s = "fn f2 x = x*7 \n 2 f2& + 3 sum 4";
     // let s = "\r";
     // let s = "sum 2 3 4";
     
@@ -69,7 +93,11 @@ fn parse(src:&[char])->Option<Et> {
     let vv = parse_exp(&mut context, src);
     vv
 }
-
+#[derive(Clone, Copy)]
+enum RetRule {
+    None,
+    Ignore,
+}
 fn parse_exp(context: &mut Context, src: &[char])->Option<Et> {
     let frame_stack = &mut context.frame_stack;
 
@@ -98,6 +126,13 @@ fn parse_exp(context: &mut Context, src: &[char])->Option<Et> {
                 None
             }
 
+            Ut::Op(Opi { act: Act::Aux(tag), prinum,.. },..) => {
+                println!("++++> op Aux ({:?}) {:?}",tag, src_rest);
+                src = src_rest;
+                let retrule = if let ";" = tag {RetRule::None} else {RetRule::Ignore};
+                Some((prinum,retrule))
+            }
+
             Ut::Op(e,kind) => {
                 if  frame.opi.last().is_none() ||
                     frame.opi.last().unwrap().0.prinum < e.prinum
@@ -108,15 +143,14 @@ fn parse_exp(context: &mut Context, src: &[char])->Option<Et> {
                     // 左目运算符，只和左边有关系，必须要执行
                     // 这个和有无返回值没有关系啦，统一了，;也统一了
                     if let DataWhere::Left(_) = e.data_where {
-                        Some(e.prinum)
+                        Some((e.prinum,RetRule::Ignore))
                     } else {
                         None
                     }
                 } else {
-                    Some(e.prinum)
+                    Some((e.prinum,RetRule::Ignore))
                 }
             }
-
 
             Ut::Pr(Pri::LBracket) => {
                 src = src_rest;
@@ -130,7 +164,7 @@ fn parse_exp(context: &mut Context, src: &[char])->Option<Et> {
             Ut::Pr(Pri::RBracket) => {
                 src = src_rest;
                 println!("=====> ****** {src:?}");
-                Some(PriNum::Zero)
+                Some((PriNum::P0,RetRule::Ignore))
             }
 
             Ut::Sy(sym) => {
@@ -164,13 +198,13 @@ fn parse_exp(context: &mut Context, src: &[char])->Option<Et> {
 
             Ut::End => {
                 println!("==========> END {src:?}");
-                Some(PriNum::Zero)
+                Some((PriNum::P0,RetRule::Ignore))
             }
         };
 
-        if let Some(prinum) = r {
-            try_pop_exp_util(&context.fn_codes,&mut context.symbols,frame, prinum.clone());
-            if prinum == PriNum::Zero && frame.opi.is_empty() {
+        if let Some(cond) = r {
+            try_pop_exp_util(&context.fn_codes,&mut context.symbols,frame, cond.clone());
+            if cond.0 == PriNum::P0 && frame.opi.is_empty() {
                 // assert_eq!(frame.data.len(),1);
                 let mut vv = frame.data.last().cloned();
                 if let Some(Data::Sym(ref d)) = vv {
@@ -475,10 +509,11 @@ fn parse_fn(src:&[char])->Option<(&[char],Vec<&[char]>,&[char],&[char])> {
     Some((name, ps, body, rest))
 }
 
-#[derive(Clone, Copy,Debug)]
+#[derive(Clone, Copy,Debug,Eq,PartialEq, Ord,PartialOrd)]
 enum Et {
+    // Bool(bool),
     I32(i32),
-    Real(f32)
+    // Real(f32)
 }
 type SymbolMap = BTreeMap<String,Et>;
 
@@ -493,40 +528,58 @@ impl Et {
 
 #[derive(Clone)]
 enum Act {
+    // Comma,
+    // Semicolon(),
+    Aux(&'static str),
+
+    Ass(fn(&mut SymbolMap,&[Data])->Et),
+
+    Or(fn(&SymbolMap,&[Data])->Et),
+
+    And(fn(&SymbolMap,&[Data])->Et),
+
+    Gt(fn(&SymbolMap,&[Data])->Et),
+    Ge(fn(&SymbolMap,&[Data])->Et),
+    Lt(fn(&SymbolMap,&[Data])->Et),
+    Le(fn(&SymbolMap,&[Data])->Et),
+
+    Ne(fn(&SymbolMap,&[Data])->Et),
+    Eq(fn(&SymbolMap,&[Data])->Et),
+
+    Cmp(fn(&SymbolMap,&[Data])->Et),
+
     Add(fn(&SymbolMap,&[Data])->Et),
     Sub(fn(&SymbolMap,&[Data])->Et),
+
     Mul(fn(&SymbolMap,&[Data])->Et),
     Div(fn(&SymbolMap,&[Data])->Et),
-    Ass(fn(&mut SymbolMap,&[Data])->Et),
-    NoRet(fn(&[Data])),
+
+    Not(fn(&SymbolMap,&[Data])->Et),
+
     Opfn(fn(&mut SymbolMap,&[Data])->Et), // 系统内定义函数
     Fn(fn(&str,&FnCodeMap,&SymbolMap,&[Data])->Et),
 }
 impl Act {
-    fn cal2(&self,symbol:&SymbolMap,d:&[Data]) -> Et {
-        match self {
-            Act::Add(f)
-            |Act::Sub(f)
-            |Act::Mul(f)
-            |Act::Div(f) => f(symbol,d),
-            _ => panic!(""),
-        }
-    }
     fn call(&self,symbol:&mut SymbolMap,d:&[Data]) -> Et {
         match self {
-            Act::Add(f)
-            |Act::Sub(f)
-            |Act::Mul(f)
-            |Act::Div(f) => f(symbol,d),
-            Act::Ass(f) => f(symbol,d),
+            Act::Ass(f)
+            => f(symbol,d),
+            Act::Add(f)|
+            Act::Sub(f)|
+            Act::Mul(f)|
+            Act::Div(f)|
+            Act::Gt(f)|
+            Act::Ge(f)|
+            Act::Lt(f)|
+            Act::Le(f)|
+            Act::Eq(f)|
+            Act::Ne(f)|
+            Act::Cmp(f)
+            => f(symbol,d),
             _ => panic!(),
         }
     }
-    fn call_noret(&self,d:&[Data]) {
-        match self {
-            Act::NoRet(f) => f(d),
-            _ => panic!(),
-        }
+    fn call_aux(&self,_d:&[Data]) {
     }
     fn call_opfn(&self,symbol:&mut SymbolMap,d:&[Data])->Et {
         match self {
@@ -580,11 +633,17 @@ enum DataWhere {
 
 #[derive(Clone,PartialEq, PartialOrd)]
 enum PriNum {
-    Zero, // )
-    One, // = ;
-    Two, // + -
-    Three, // * /
-    Four, // (
+    P0, // )
+    P1, // = ;
+    P2, // + -
+    P3, // * /
+    P4, // (
+    P5,
+    P6,
+    P7,
+    P8,
+    P9,
+    P10
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -636,11 +695,11 @@ impl std::ops::Add for Et {
     fn add(self, rhs: Self) -> Self::Output {
         let e1 = match self {
             Et::I32(e) => e,
-            Et::Real(_) => todo!(),
+            _ => todo!(),
         };
         let e2 = match rhs {
             Et::I32(e) => e,
-            Et::Real(_) => todo!(),
+            _ => todo!(),
         };
         Self::I32(e1+e2)
     }
@@ -651,11 +710,11 @@ impl std::ops::Sub for Et {
     fn sub(self, rhs: Self) -> Self::Output {
         let e1 = match self {
             Et::I32(e) => e,
-            Et::Real(_) => todo!(),
+            _ => todo!(),
         };
         let e2 = match rhs {
             Et::I32(e) => e,
-            Et::Real(_) => todo!(),
+            _ => todo!(),
         };
         Self::I32(e1-e2)
     }
@@ -666,11 +725,11 @@ impl std::ops::Mul for Et {
     fn mul(self, rhs: Self) -> Self::Output {
         let e1 = match self {
             Et::I32(e) => e,
-            Et::Real(_) => todo!(),
+            _ => todo!(),
         };
         let e2 = match rhs {
             Et::I32(e) => e,
-            Et::Real(_) => todo!(),
+            _ => todo!(),
         };
         Self::I32(e1*e2)
     }
@@ -681,13 +740,22 @@ impl std::ops::Div for Et {
     fn div(self, rhs: Self) -> Self::Output {
         let e1 = match self {
             Et::I32(e) => e,
-            Et::Real(_) => todo!(),
+            _ => todo!(),
         };
         let e2 = match rhs {
             Et::I32(e) => e,
-            Et::Real(_) => todo!(),
+            _ => todo!(),
         };
         Self::I32(e1/e2)
+    }
+}
+
+impl Et {
+    const fn as_bool(&self)->bool {
+        let Et::I32(0) = self else {
+            return true;
+        };
+        false
     }
 }
 
@@ -719,10 +787,10 @@ fn assign (symbol:&mut BTreeMap<String,Et>,d:&[Data])->Et {
     };
     v2
 }
-fn no_return(_:&[Data]) {
-    // let ss = "".parse();
-    // let ss = ss.ok();
-}
+// fn no_return(_:&[Data]) {
+//     // let ss = "".parse();
+//     // let ss = ss.ok();
+// }
 
 fn sum (symbol:&mut BTreeMap<String,Et>,data:&[Data])->Et {
     let r = data.iter().map(
@@ -763,19 +831,87 @@ fn fn_do(fn_name:&str,codes:&FnCodeMap,symbol:&BTreeMap<String,Et>,data:&[Data])
     };
     et
 }
+fn gt (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
+    let v1 = value_of(symbol, &d[1]);
+    let v2 = value_of(symbol, &d[0]);
+    Et::I32((v1 > v2) as i32)
+}
+fn ge (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
+    let v1 = value_of(symbol, &d[1]);
+    let v2 = value_of(symbol, &d[0]);
+    Et::I32((v1 >= v2) as i32)
+}
+fn lt (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
+    let v1 = value_of(symbol, &d[1]);
+    let v2 = value_of(symbol, &d[0]);
+    Et::I32((v1 < v2) as i32)
+}
+fn le (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
+    let v1 = value_of(symbol, &d[1]);
+    let v2 = value_of(symbol, &d[0]);
+    Et::I32((v1 <= v2) as i32)
+}
+fn eq (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
+    let v1 = value_of(symbol, &d[1]);
+    let v2 = value_of(symbol, &d[0]);
+    Et::I32((v1 == v2) as i32)
+}
+fn ne (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
+    let v1 = value_of(symbol, &d[1]);
+    let v2 = value_of(symbol, &d[0]);
+    Et::I32((v1 != v2) as i32)
+}
+fn cmp (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
+    let v1 = value_of(symbol, &d[1]);
+    let v2 = value_of(symbol, &d[0]);
+    Et::I32((v1.partial_cmp(&v2).unwrap()) as i32)
+}
+fn and (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
+    let v1 = value_of(symbol, &d[1]);
+    let v2 = value_of(symbol, &d[0]);
+    Et::I32((v1.as_bool() && v2.as_bool()) as i32)
+}
+fn or (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
+    let v1 = value_of(symbol, &d[1]);
+    let v2 = value_of(symbol, &d[0]);
+    Et::I32((v1.as_bool() || v2.as_bool()) as i32)
+}
+fn not (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
+    let v1 = value_of(symbol, &d[0]);
+    Et::I32((!v1.as_bool()) as i32)
+}
 
+const OPS:[Opi;20] = [
+    Opi::new(Sym::Str(&[',']),Act::Aux(","),PriNum::P1,DataWhere::Zero,Ret::None),
+    Opi::new(Sym::Str(&[';']),Act::Aux(";"),PriNum::P1,DataWhere::Zero,Ret::None),
 
-const OPS:[Opi;9] = [
-    Opi::new(Sym::Str(&['+']),Act::Add(add),PriNum::Two,DataWhere::Any(2),Ret::Value),
-    Opi::new(Sym::Str(&['-']),Act::Sub(sub),PriNum::Two,DataWhere::Any(2),Ret::Value),
-    Opi::new(Sym::Str(&['*']),Act::Mul(mul),PriNum::Three,DataWhere::Any(2),Ret::Value),
-    Opi::new(Sym::Str(&['/']),Act::Div(div),PriNum::Three,DataWhere::Any(2),Ret::Value),
-    Opi::new(Sym::Str(&['=']),Act::Ass(assign),PriNum::One,DataWhere::Any(2),Ret::Value),
-    Opi::new(Sym::Str(&[';']),Act::NoRet(no_return),PriNum::One,DataWhere::Left(1),Ret::None),
-    Opi::new(Sym::Str(&['s','u','m']),Act::Opfn(sum),PriNum::Two,DataWhere::Any(-1),Ret::Value),
-    Opi::new(Sym::Str(&['c','n','t']),Act::Opfn(cnt),PriNum::Three,DataWhere::Any(-1),Ret::Value),
-    Opi::new(Sym::Str(&['a','v','g']),Act::Opfn(avg),PriNum::Two,DataWhere::Any(-1),Ret::Value),
-    // Opi::new(&['f','n'],Act::FnDef(fn_def),PriNum::Four,DataWhere::Zero,Ret::None),
+    Opi::new(Sym::Str(&['=']),Act::Ass(assign),PriNum::P2,DataWhere::Any(2),Ret::Value),
+
+    Opi::new(Sym::Str(&['o','r']),Act::Or(or),PriNum::P3,DataWhere::Zero,Ret::None),
+
+    Opi::new(Sym::Str(&['a','n','d']),Act::And(and),PriNum::P4,DataWhere::Zero,Ret::None),
+
+    Opi::new(Sym::Str(&['>']),Act::Gt(gt),PriNum::P5,DataWhere::Any(2),Ret::Value),
+    Opi::new(Sym::Str(&['>','=']),Act::Ge(ge),PriNum::P5,DataWhere::Any(2),Ret::Value),
+    Opi::new(Sym::Str(&['<']),Act::Lt(lt),PriNum::P5,DataWhere::Any(2),Ret::Value),
+    Opi::new(Sym::Str(&['<','=']),Act::Le(le),PriNum::P5,DataWhere::Any(2),Ret::Value),
+
+    Opi::new(Sym::Str(&['!','=']),Act::Ne(ne),PriNum::P6,DataWhere::Any(2),Ret::Value),
+    Opi::new(Sym::Str(&['=','=']),Act::Eq(eq),PriNum::P6,DataWhere::Any(2),Ret::Value),
+    Opi::new(Sym::Str(&['c','m','p']),Act::Cmp(cmp),PriNum::P6,DataWhere::Any(2),Ret::Value),
+
+    Opi::new(Sym::Str(&['s','u','m']),Act::Opfn(sum),PriNum::P7,DataWhere::Any(-1),Ret::Value),
+    Opi::new(Sym::Str(&['a','v','g']),Act::Opfn(avg),PriNum::P7,DataWhere::Any(-1),Ret::Value),
+
+    Opi::new(Sym::Str(&['+']),Act::Add(add),PriNum::P8,DataWhere::Any(2),Ret::Value),
+    Opi::new(Sym::Str(&['-']),Act::Sub(sub),PriNum::P8,DataWhere::Any(2),Ret::Value),
+
+    Opi::new(Sym::Str(&['*']),Act::Mul(mul),PriNum::P9,DataWhere::Any(2),Ret::Value),
+    Opi::new(Sym::Str(&['/']),Act::Div(div),PriNum::P9,DataWhere::Any(2),Ret::Value),
+
+    Opi::new(Sym::Str(&['n','o','t']),Act::Not(not),PriNum::P10,DataWhere::Zero,Ret::None),
+    Opi::new(Sym::Str(&['c','n','t']),Act::Opfn(cnt),PriNum::P10,DataWhere::Any(-1),Ret::Value),
+    //     Opi::new(Sym::Str(&['<','=']),Act::Le(le),PriNum::Three,DataWhere::Any(2),Ret::Value),
     ];
 
 #[derive(Clone,Debug)]
@@ -859,7 +995,7 @@ fn unit_next<'a>(src:&'a[char], frame_empty:bool,codes:&FnCodeMap)->Option<(Ut,&
     // <1> 12345.0123
     if DIGITS.contains(c) {
         if let Some((ni,_deci,_w,src_rest)) = parse_number(src) {
-            println!("number parsed is {ni}+{} = {_deci}/{_w}", _deci as f32/_w as f32);
+            println!("number parsed is {ni}+({}==={_deci}/{_w})", _deci as f32/_w as f32);
             return Some((Ut::Ni(Et::I32(ni)),src_rest));
         }
     // <2> +-*/=;sum cnt
@@ -907,7 +1043,7 @@ fn unit_next<'a>(src:&'a[char], frame_empty:bool,codes:&FnCodeMap)->Option<(Ut,&
             };
             let fn_name = Sym::String(sym);
             let fn_dw = DataWhere::Any(fn_def.ps.len() as i32);
-            const FN_PRINUM: PriNum = PriNum::Four;
+            const FN_PRINUM: PriNum = PriNum::P10;
             const FN_DO: Act = Act::Fn(fn_do);
             const FN_RET: Ret = Ret::Value;
             let fn_opi = Opi::new(fn_name, FN_DO, FN_PRINUM, fn_dw, FN_RET);
@@ -928,24 +1064,28 @@ fn push_code(fn_def:Fndef, codes:&mut FnCodeMap) {
     codes.insert(fn_def.name.clone(), fn_def);
 }
 
-fn try_pop_exp_util(codes:&FnCodeMap,symbol:&mut SymbolMap,frame: &mut Frame, prinum:PriNum) {
-    while let Some(last_op) = frame.opi.last() {
-        if last_op.0.prinum >= prinum {
-            pop_exp(codes,symbol,frame);
+fn try_pop_exp_util(codes:&FnCodeMap,symbol:&mut SymbolMap,frame: &mut Frame, cond:(PriNum,RetRule)) {
+    let (prinum,lastret) = cond;
+    while let Some((last_op,_last_para)) = frame.opi.last() {
+        if last_op.prinum >= prinum {
+            let is_op_last = frame.opi.len()==1;
+            let ret = if let (RetRule::None,true) = (&lastret,is_op_last)
+                {RetRule::None} else {RetRule::Ignore}; 
+            pop_exp(codes,symbol,frame,ret);
         } else {
             break;
         }
     }
 }
-fn pop_exp(codes:&FnCodeMap,symbol:&mut SymbolMap,frame: &mut Frame) {
+fn pop_exp(codes:&FnCodeMap,symbol:&mut SymbolMap,frame: &mut Frame, ret:RetRule)->Option<()> {
     let Some(opi) = frame.opi.pop() else {
-        return;
+        return None;
     };
     println!("\t~~~~~~~ acton:{:?} ~~~~~~~>", opi.0.name);
     println!("\t0:{:?}",frame.data);
     let d;
     match opi.0.data_where {
-        DataWhere::Zero => todo!(),
+        DataWhere::Zero => d = [].as_slice(),
         DataWhere::Any(-1) => {
             d = frame.data.as_slice();
             // println!("\t1:param cnt: {0}/{0}",d.len());
@@ -963,12 +1103,12 @@ fn pop_exp(codes:&FnCodeMap,symbol:&mut SymbolMap,frame: &mut Frame) {
 
     let d3; // return value
     match opi.0.act {
-        Act::Add(_)|Act::Sub(_)|Act::Mul(_)|Act::Div(_)|Act::Ass(_) => {
-            d3 = Some(opi.0.act.call(symbol, d));
-        }
-        Act::Opfn(_) => {
-            d3 = Some(opi.0.act.call_opfn(symbol, d));
-        }
+        Act::Add(_)|Act::Sub(_)|Act::Mul(_)|Act::Div(_)|Act::Ass(_)|
+        Act::Ge(_)|Act::Gt(_)|Act::Le(_)|Act::Lt(_)|Act::Eq(_)|Act::Ne(_)|Act::Cmp(_)|
+        Act::And(_)|Act::Or(_)|Act::Not(_)
+            => d3 = Some(opi.0.act.call(symbol, d)),
+        Act::Opfn(_)
+            => d3 = Some(opi.0.act.call_opfn(symbol, d)),
         Act::Fn(_) => {
             // HERE, happens cracked, when we call name.str
             // let Sym::String(ref name) = opi.0.name else {
@@ -980,12 +1120,11 @@ fn pop_exp(codes:&FnCodeMap,symbol:&mut SymbolMap,frame: &mut Frame) {
             let name = name.as_str();
             d3 = Some(opi.0.act.call_fn(name, codes, symbol, d));
         }
-        Act::NoRet(_) => {
-            // println!("      {:?}({d:?})",opi.0.name);
-            let _d = opi.0.act.call_noret(d);
+        Act::Aux(_) => {
             d3 = None;
+            println!("      {:?}({d:?})",opi.0.name);
+            unreachable!("the code would not be runed here");
         }
-        // _ => {unreachable!();}
     }
 
     // println!("\t4:{:?} pop {}",opi.1,d.len());
@@ -998,13 +1137,14 @@ fn pop_exp(codes:&FnCodeMap,symbol:&mut SymbolMap,frame: &mut Frame) {
 
     // return value
     // println!("\t5:={:?} {:?}",d3,opi.0.ret);
-    if let Ret::Value = opi.0.ret {
+    if let (Ret::Value,RetRule::Ignore) = (opi.0.ret,ret) {
         if let Some(d3) = d3 {
             frame.data.push(Data::Val(d3));
         }
     }
 
-    // println!("\t~~~~~~~~ 6:{:?}",frame.data);
+    println!("\t~~~~~~~~ 6:{:?}",frame.data);
+    Some(())
 }
 
 #[derive(Clone,Debug)]
