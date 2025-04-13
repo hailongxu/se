@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{cmp::Ordering, collections::BTreeMap};
 
 #[test]
 fn test_enun_next() {
@@ -48,6 +48,8 @@ pub fn test() {
     // let ss = s.to_string().as_str();
     let s = "fn f x=x \n f 1";
     let s = "fn f2 x = x*7 \n 2 f2& + 3 sum 4";
+    let s = "3>4, not";
+    // let s = "1900 2*";
     // let s = "\r";
     // let s = "sum 2 3 4";
     
@@ -528,8 +530,6 @@ impl Et {
 
 #[derive(Clone)]
 enum Act {
-    // Comma,
-    // Semicolon(),
     Aux(&'static str),
 
     Ass(fn(&mut SymbolMap,&[Data])->Et),
@@ -574,7 +574,10 @@ impl Act {
             Act::Le(f)|
             Act::Eq(f)|
             Act::Ne(f)|
-            Act::Cmp(f)
+            Act::Cmp(f)|
+            Act::And(f)|
+            Act::Or(f)|
+            Act::Not(f)
             => f(symbol,d),
             _ => panic!(),
         }
@@ -759,29 +762,29 @@ impl Et {
     }
 }
 
-fn add (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
-    let v1 = value_of(symbol, &d[1]);
-    let v2 = value_of(symbol, &d[0]);
+fn op_add (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
+    let v1 = value_of(symbol, &d[0]);
+    let v2 = value_of(symbol, &d[1]);
     v1+v2
 }
-fn sub (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
-    let v1 = value_of(symbol, &d[1]);
-    let v2 = value_of(symbol, &d[0]);
+fn op_sub (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
+    let v1 = value_of(symbol, &d[0]);
+    let v2 = value_of(symbol, &d[1]);
     v1-v2
 }
-fn mul (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
-    let v1 = value_of(symbol, &d[1]);
-    let v2 = value_of(symbol, &d[0]);
+fn op_mul (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
+    let v1 = value_of(symbol, &d[0]);
+    let v2 = value_of(symbol, &d[1]);
     v1*v2
 }
-fn div (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
-    let v1 = value_of(symbol, &d[1]);
-    let v2 = value_of(symbol, &d[0]);
+fn op_div (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
+    let v1 = value_of(symbol, &d[0]);
+    let v2 = value_of(symbol, &d[1]);
     v1/v2
 }
-fn assign (symbol:&mut BTreeMap<String,Et>,d:&[Data])->Et {
-    let v2 = *d[1].as_et();
-    let _old = match &d[0] {
+fn op_assign (symbol:&mut BTreeMap<String,Et>,d:&[Data])->Et {
+    let v2 = *d[0].as_et();
+    let _old = match &d[1] {
         Data::Sym(e) => symbol.insert(e.clone(), v2),
         _ => panic!(""),
     };
@@ -792,33 +795,33 @@ fn assign (symbol:&mut BTreeMap<String,Et>,d:&[Data])->Et {
 //     // let ss = ss.ok();
 // }
 
-fn sum (symbol:&mut BTreeMap<String,Et>,data:&[Data])->Et {
+fn op_sum (symbol:&mut BTreeMap<String,Et>,data:&[Data])->Et {
     let r = data.iter().map(
         |d| *value_of(symbol, d).as_i32()
     ).sum::<i32>();
     Et::I32(r)
 }
 
-fn cnt (symbol:&mut BTreeMap<String,Et>,data:&[Data])->Et {
+fn op_cnt (symbol:&mut BTreeMap<String,Et>,data:&[Data])->Et {
     Et::I32(data.len() as i32)
 }
 
-fn avg (symbol:&mut BTreeMap<String,Et>,data:&[Data])->Et {
-    let Et::I32(sum) = sum(symbol,data) else {
+fn op_avg (symbol:&mut BTreeMap<String,Et>,data:&[Data])->Et {
+    let Et::I32(sum) = op_sum(symbol,data) else {
         panic!("not supports non i32");
     };
     let n = data.len() as i32;
     Et::I32(sum/n)
 }
 
-fn fn_def(src:&[char])->Option<(&[char],&[char])> {
+fn op_fn_def(src:&[char])->Option<(&[char],&[char])> {
     let Some((_name,ref _ps,body, rest)) = parse_fn(src) else {
         return None;
     };
     Some((body, rest))
 }
 
-fn fn_do(fn_name:&str,codes:&FnCodeMap,symbol:&BTreeMap<String,Et>,data:&[Data])->Et {
+fn op_fn_do(fn_name:&str,codes:&FnCodeMap,symbol:&BTreeMap<String,Et>,data:&[Data])->Et {
     let mut ps = Vec::new();
     for d in data {
         let v = value_of(symbol, d);
@@ -831,88 +834,189 @@ fn fn_do(fn_name:&str,codes:&FnCodeMap,symbol:&BTreeMap<String,Et>,data:&[Data])
     };
     et
 }
-fn gt (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
+fn op_gt (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
     let v1 = value_of(symbol, &d[1]);
     let v2 = value_of(symbol, &d[0]);
     Et::I32((v1 > v2) as i32)
 }
-fn ge (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
+fn op_ge (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
     let v1 = value_of(symbol, &d[1]);
     let v2 = value_of(symbol, &d[0]);
     Et::I32((v1 >= v2) as i32)
 }
-fn lt (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
+fn op_lt (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
     let v1 = value_of(symbol, &d[1]);
     let v2 = value_of(symbol, &d[0]);
     Et::I32((v1 < v2) as i32)
 }
-fn le (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
+fn op_le (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
     let v1 = value_of(symbol, &d[1]);
     let v2 = value_of(symbol, &d[0]);
     Et::I32((v1 <= v2) as i32)
 }
-fn eq (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
+fn op_eq (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
     let v1 = value_of(symbol, &d[1]);
     let v2 = value_of(symbol, &d[0]);
     Et::I32((v1 == v2) as i32)
 }
-fn ne (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
+fn op_ne (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
     let v1 = value_of(symbol, &d[1]);
     let v2 = value_of(symbol, &d[0]);
     Et::I32((v1 != v2) as i32)
 }
-fn cmp (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
+fn op_cmp (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
     let v1 = value_of(symbol, &d[1]);
     let v2 = value_of(symbol, &d[0]);
     Et::I32((v1.partial_cmp(&v2).unwrap()) as i32)
 }
-fn and (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
+fn op_and (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
     let v1 = value_of(symbol, &d[1]);
     let v2 = value_of(symbol, &d[0]);
     Et::I32((v1.as_bool() && v2.as_bool()) as i32)
 }
-fn or (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
+fn op_or (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
     let v1 = value_of(symbol, &d[1]);
     let v2 = value_of(symbol, &d[0]);
     Et::I32((v1.as_bool() || v2.as_bool()) as i32)
 }
-fn not (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
+fn op_not (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
     let v1 = value_of(symbol, &d[0]);
     Et::I32((!v1.as_bool()) as i32)
 }
 
+// 如何初始化这个，的确得想想，Lazystatic好呀，不用锁，最长匹配优先
 const OPS:[Opi;20] = [
     Opi::new(Sym::Str(&[',']),Act::Aux(","),PriNum::P1,DataWhere::Zero,Ret::None),
     Opi::new(Sym::Str(&[';']),Act::Aux(";"),PriNum::P1,DataWhere::Zero,Ret::None),
 
-    Opi::new(Sym::Str(&['=']),Act::Ass(assign),PriNum::P2,DataWhere::Any(2),Ret::Value),
+    Opi::new(Sym::Str(&['=','=']),Act::Eq(op_eq),PriNum::P6,DataWhere::Any(2),Ret::Value),
+    Opi::new(Sym::Str(&['=']),Act::Ass(op_assign),PriNum::P2,DataWhere::Any(2),Ret::Value),
 
-    Opi::new(Sym::Str(&['o','r']),Act::Or(or),PriNum::P3,DataWhere::Zero,Ret::None),
+    Opi::new(Sym::Str(&['o','r']),Act::Or(op_or),PriNum::P3,DataWhere::Any(2),Ret::Value),
 
-    Opi::new(Sym::Str(&['a','n','d']),Act::And(and),PriNum::P4,DataWhere::Zero,Ret::None),
+    Opi::new(Sym::Str(&['a','n','d']),Act::And(op_and),PriNum::P4,DataWhere::Any(2),Ret::Value),
 
-    Opi::new(Sym::Str(&['>']),Act::Gt(gt),PriNum::P5,DataWhere::Any(2),Ret::Value),
-    Opi::new(Sym::Str(&['>','=']),Act::Ge(ge),PriNum::P5,DataWhere::Any(2),Ret::Value),
-    Opi::new(Sym::Str(&['<']),Act::Lt(lt),PriNum::P5,DataWhere::Any(2),Ret::Value),
-    Opi::new(Sym::Str(&['<','=']),Act::Le(le),PriNum::P5,DataWhere::Any(2),Ret::Value),
+    Opi::new(Sym::Str(&['>','=']),Act::Ge(op_ge),PriNum::P5,DataWhere::Any(2),Ret::Value),
+    Opi::new(Sym::Str(&['>']),Act::Gt(op_gt),PriNum::P5,DataWhere::Any(2),Ret::Value),
+    Opi::new(Sym::Str(&['<','=']),Act::Le(op_le),PriNum::P5,DataWhere::Any(2),Ret::Value),
+    Opi::new(Sym::Str(&['<']),Act::Lt(op_lt),PriNum::P5,DataWhere::Any(2),Ret::Value),
 
-    Opi::new(Sym::Str(&['!','=']),Act::Ne(ne),PriNum::P6,DataWhere::Any(2),Ret::Value),
-    Opi::new(Sym::Str(&['=','=']),Act::Eq(eq),PriNum::P6,DataWhere::Any(2),Ret::Value),
-    Opi::new(Sym::Str(&['c','m','p']),Act::Cmp(cmp),PriNum::P6,DataWhere::Any(2),Ret::Value),
+    Opi::new(Sym::Str(&['!','=']),Act::Ne(op_ne),PriNum::P6,DataWhere::Any(2),Ret::Value),
+    // Opi::new(Sym::Str(&['=','=']),Act::Eq(eq),PriNum::P6,DataWhere::Any(2),Ret::Value),
+    Opi::new(Sym::Str(&['c','m','p']),Act::Cmp(op_cmp),PriNum::P6,DataWhere::Any(2),Ret::Value),
 
-    Opi::new(Sym::Str(&['s','u','m']),Act::Opfn(sum),PriNum::P7,DataWhere::Any(-1),Ret::Value),
-    Opi::new(Sym::Str(&['a','v','g']),Act::Opfn(avg),PriNum::P7,DataWhere::Any(-1),Ret::Value),
+    Opi::new(Sym::Str(&['s','u','m']),Act::Opfn(op_sum),PriNum::P7,DataWhere::Any(-1),Ret::Value),
+    Opi::new(Sym::Str(&['a','v','g']),Act::Opfn(op_avg),PriNum::P7,DataWhere::Any(-1),Ret::Value),
 
-    Opi::new(Sym::Str(&['+']),Act::Add(add),PriNum::P8,DataWhere::Any(2),Ret::Value),
-    Opi::new(Sym::Str(&['-']),Act::Sub(sub),PriNum::P8,DataWhere::Any(2),Ret::Value),
+    Opi::new(Sym::Str(&['+']),Act::Add(op_add),PriNum::P8,DataWhere::Any(2),Ret::Value),
+    Opi::new(Sym::Str(&['-']),Act::Sub(op_sub),PriNum::P8,DataWhere::Any(2),Ret::Value),
 
-    Opi::new(Sym::Str(&['*']),Act::Mul(mul),PriNum::P9,DataWhere::Any(2),Ret::Value),
-    Opi::new(Sym::Str(&['/']),Act::Div(div),PriNum::P9,DataWhere::Any(2),Ret::Value),
+    Opi::new(Sym::Str(&['*']),Act::Mul(op_mul),PriNum::P9,DataWhere::Any(2),Ret::Value),
+    Opi::new(Sym::Str(&['/']),Act::Div(op_div),PriNum::P9,DataWhere::Any(2),Ret::Value),
 
-    Opi::new(Sym::Str(&['n','o','t']),Act::Not(not),PriNum::P10,DataWhere::Zero,Ret::None),
-    Opi::new(Sym::Str(&['c','n','t']),Act::Opfn(cnt),PriNum::P10,DataWhere::Any(-1),Ret::Value),
+    Opi::new(Sym::Str(&['n','o','t']),Act::Not(op_not),PriNum::P10,DataWhere::Any(1),Ret::Value),
+    Opi::new(Sym::Str(&['c','n','t']),Act::Opfn(op_cnt),PriNum::P10,DataWhere::Any(-1),Ret::Value),
     //     Opi::new(Sym::Str(&['<','=']),Act::Le(le),PriNum::Three,DataWhere::Any(2),Ret::Value),
     ];
+    // const OOO: [Opi;2] = ops();
+
+// const ssss:[Opi;2] = [
+//     Opi::new(Sym::Str(&['=']),Act::Mul(mul),PriNum::P9,DataWhere::Any(2),Ret::Value),
+//     Opi::new(Sym::Str(&['=','=']),Act::Mul(mul),PriNum::P9,DataWhere::Any(2),Ret::Value)
+//     ];
+// const sssd:[Opi:2] = [
+    
+// ];
+// static AA:std::cell::OnceCell<[&Opi;2]> =
+// use std::sync::LazyLock;
+// fn fff() {
+// let  BBB = LazyLock::new(||ops(&ssss));
+// }
+// fn ops(sss:&[Opi;2])->[&Opi;2] {
+//     let aa = sss.each_ref();
+//     aa
+//     // let bb = sss.as_ref();
+//     // let cc = bb.
+//     // bb
+// }
+
+mod con {
+    use std::cmp::Ordering;
+    use super::{Opi,Sym};
+    
+    const fn max(ops:&[Opi])->usize {
+        let n:usize = ops.len();
+        assert!(n>=2);
+        let mut m = &ops[0];
+        let mut ii = 0;
+        let mut i = 1;
+        loop {
+            let Sym::Str(n1) = m.name else {unreachable!()};
+            let op = if i<n {i+=1;&ops[i]} else {break;};
+            let Sym::Str(n2) = op.name else {unreachable!()};
+            let r = cmp_str(n1,n2);
+            if r.is_le() {
+                m = op;
+                ii = i;
+            }
+        }
+        return ii;
+    }
+
+    const fn cmp_str(a1:&[char],a2:&[char])->Ordering {
+        let n1:usize = a1.len();
+        let n2:usize = a2.len();
+        let mut i1 = 0;
+        let mut i2 = 0;
+        loop {
+            let c1 = if i1<n1 {Some(a1[i1])} else {None};
+            let c2 = if i2<n2 {Some(a2[i2])} else {None};
+            match (c1,c2) {
+                (None, None) => break Ordering::Equal,
+                (None, Some(_)) => break Ordering::Less,
+                (Some(_), None) => break Ordering::Greater,
+                (Some(c1), Some(c2)) =>
+                    if c1 == c2 { i1+=1;i2+=1; }
+                    else if c1 > c2 {break Ordering::Greater}
+                    else {break Ordering::Less}
+            }
+        }
+    }
+}
+//     const fn max (ops:&[Opi])-> &Opi {
+//         ops.b
+//         let x = &ops[0];
+//         // let x = &x.name;
+//         let Sym::Str(x) = &ops[0].name else {unreachable!()};
+//         let max = ops.first();
+//         // for e in ops {
+            
+//         // }
+//         // ops.sort()
+//         enum EEE {a(&'static str),b(String)};
+//         let aa = EEE::a("");
+//         let EEE::b(a) = aa else {unimplemented!()};
+//         // a.push('a');
+//         &ops[0]
+//     }
+//     let aa = std::sync::LazyLock::new(||{
+//         let mut ops = ops;
+//         ops.sort_by(|
+//             op1,//Opi{name:Sym::Str(name1),..},
+//             op2,//Opi{name:Sym::Str(name2),..}
+//             |
+//             // let Opi{name:Sym::Str(name1),..} = op1 else {unreachable!();};
+//             let Sym::Str(a) = op1.name else {unreachable!()};
+//             name1.cmp(name2)
+//         );
+//         ops
+//     });
+//     let aa = &*aa;
+//     let aa = aa.clone();
+//     aa
+// };
+
+// }
 
 #[derive(Clone,Debug)]
 enum Data {
@@ -1044,7 +1148,7 @@ fn unit_next<'a>(src:&'a[char], frame_empty:bool,codes:&FnCodeMap)->Option<(Ut,&
             let fn_name = Sym::String(sym);
             let fn_dw = DataWhere::Any(fn_def.ps.len() as i32);
             const FN_PRINUM: PriNum = PriNum::P10;
-            const FN_DO: Act = Act::Fn(fn_do);
+            const FN_DO: Act = Act::Fn(op_fn_do);
             const FN_RET: Ret = Ret::Value;
             let fn_opi = Opi::new(fn_name, FN_DO, FN_PRINUM, fn_dw, FN_RET);
             return Some((Ut::Op(fn_opi, kind.0),&src_rest[kind.1..]));
