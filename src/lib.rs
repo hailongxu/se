@@ -16,6 +16,7 @@ fn test_enun_next() {
             PriNum::P9 => PriNum::P10,
             PriNum::P10 => PriNum::P11,
             PriNum::P11 => unreachable!(),
+            PriNum::P12 => unimplemented!(),
         }
     }
     const a:PriNum=PriNum::P9;
@@ -24,12 +25,6 @@ fn test_enun_next() {
 
 #[test]
 pub fn test() {
-    if f32::NAN == f32::NAN {
-        println!("==> NaN == NaN");
-    } else {
-        println!("==> NaN != NaN");
-    }
-
     // let s = "1万3百20";
     // let s = "-5 * ( ( -3 + 6 ) )";
     // let s = r"
@@ -54,7 +49,8 @@ pub fn test() {
     // let s = "sum 2 3 4";
     // let s = "\r";
     // let s = "3+5*2";
-    let s = "if 1 then 3 else 4 end";
+    let s = "if 1-1 then 3 + 4 end";
+    // let s = "if 0 then 2 elif 3 then 4 else 5 end";
     
     let s = s.chars().collect::<Box<[char]>>();
     let s = s.as_ref();
@@ -113,6 +109,7 @@ enum RetRule {
 fn parse_exp(context: &mut Context, src: &[char])->Option<Et> {
     let whole = src;
     let frame_stack = &mut context.frame_stack;
+    context.correspond.push_verify(false);
 
     if src.is_empty() {
         return None;
@@ -120,8 +117,10 @@ fn parse_exp(context: &mut Context, src: &[char])->Option<Et> {
     let mut src = src;
 
     println!("src: {src:?}");
+    println!("@@@ AST {:?}",context.correspond);
 
-    loop {
+
+    let exit_value = loop {
         let frame = frame_stack.last_mut().unwrap();
         let frame_empty = frame.data.is_empty() && frame.opi.is_empty();
 
@@ -130,7 +129,7 @@ fn parse_exp(context: &mut Context, src: &[char])->Option<Et> {
             return None;
         };
         if let Token::Op(op,para) = &token {
-        println!("token is {:?} src {src_rest:?}", (&op.name,&op.act,para));
+            println!("token is {:?} src {src_rest:?}", (&op.name,&op.act,para));
         } else {
             println!("token is {token:?} src {src_rest:?}", );
         };
@@ -139,8 +138,7 @@ fn parse_exp(context: &mut Context, src: &[char])->Option<Et> {
             return None;
         };
         src = src_rest;
-        // println!("rest:{:?}",src);
-        if let CorreE::Ignore = corre {
+        if let CorreE::IgnoreNextSteps = corre {
             continue;
         }
         let subject_matter = push_exp(corre, frame_stack);
@@ -148,12 +146,28 @@ fn parse_exp(context: &mut Context, src: &[char])->Option<Et> {
             continue;
         }
         let frame = frame_stack.last_mut().unwrap();
-        if dicide_todo(subject_matter, &context.fn_codes,&mut context.symbols,frame).is_none() {
+        let and_todo = decide_todo(subject_matter, &context.fn_codes,&mut context.symbols,frame);
+        // echo to the ast_correspond, in order to keep the clear of structure
+        let Some(_) = ast_condition_back(and_todo, &mut context.correspond) else {
             continue;
         };
         // if we return value from loop, the frame_stack will be called mut used 2 times
-        if let Some(result) = break_value(frame_stack, &context.symbols) {
+        if let Some(result) = pop_frame_or_exit(frame_stack, &context.symbols) {
             break result;
+        }
+    };
+    context.correspond.pop_verify();
+    debug_assert!(context.correspond.is_verify_empty());
+    exit_value
+}
+
+fn ast_condition_back(and_todo:AndTodo, correspond:&mut CorrespondVec)->Option<()> {
+    match and_todo {
+        AndTodo::Try => Some(()), // try to do pop_frame_or_exit
+        AndTodo::None => None,
+        AndTodo::condition_back(outside) => {
+            correspond.condition_back(outside);
+            None
         }
     }
 }
@@ -649,8 +663,6 @@ impl Et {
 
 #[derive(Clone,Debug)]
 enum Act {
-    // Aux(&'static str),
-
     Ass(fn(&mut SymbolMap,&[Data])->Et),
 
     Or(fn(&SymbolMap,&[Data])->Et),
@@ -724,10 +736,8 @@ enum Bracket {
 }
 impl Bracket {
     const METAS: [(Token,char,PriNum); 2] = [
-        (Token::Pr(Bracket::LBracket), '(', PriNum::P11),
+        (Token::Pr(Bracket::LBracket), '(', PriNum::P12),
         (Token::Pr(Bracket::RBracket), ')', PriNum::P1)
-        // ('(', CorreE::Sub(Pri::LBracket)),
-        // (')', CorreE::Sub(Pri::RBracket))
     ];
     const fn info(&self)->&(Token,char,PriNum) {
         &Self::METAS[*self as usize]
@@ -736,6 +746,22 @@ impl Bracket {
         self.info().2
     }
 }
+
+// struct Hori(bool);
+// impl Hori {
+//     const PRINUM:PriNum = PriNum::P1;
+//     const fn is_next_running(inside:bool, outside:bool)->bool{
+//         !(inside ^ outside)
+//     }
+//     const fn is_next_verify(inside:bool, outside:bool)->bool{
+//         inside ^ outside
+//     }
+//     // fn and_do(&self, outside: bool, frame_stack: &mut FrameVec) {
+//     //     if Self::is_next_running(self.0, outside) {
+//     //         push_frame(frame_stack);
+//     //     }
+//     // }
+// } 
 // const CORRESPOND_IF_UT: [(&[char], Token); 5] = [
 //     (['i','f'].as_slice(),Token::Iff(Ifflow::If)),
 //     (['t','h','e','n'].as_slice(),Token::Iff(Ifflow::Then)),
@@ -761,38 +787,38 @@ enum Keyword
 {
     If,Then,Elif,Else,Fn,End
 }
-struct Kwi {
+struct KeywordMeta {
     id: Keyword,
     name: Schars,
 }
-impl Kwi {
+impl KeywordMeta {
     const fn new(id:Keyword,name:Schars)->Self {
-        Kwi {id,name}
+        KeywordMeta {id,name}
     }
 }
-impl ToChars for Kwi {
+impl ToChars for KeywordMeta {
     fn to_chars(&self)->&[char] {
         self.name
     }
 }
-impl ToChars for &Kwi {
+impl ToChars for &KeywordMeta {
     fn to_chars(&self)->&[char] {
         self.name
     }
 }
 impl Keyword {
-    const METAS: [Kwi; 6] = [
-        Kwi::new(Keyword::If,&['i','f']),
-        Kwi::new(Keyword::Then,&['t','h','e','n']),
-        Kwi::new(Keyword::Elif,&['e','l','i','f']),
-        Kwi::new(Keyword::Else,&['e','l','s','e']),
-        Kwi::new(Keyword::Fn,&['f','n']),
-        Kwi::new(Keyword::End,&['e','n','d']),
+    const METAS: [KeywordMeta; 6] = [
+        KeywordMeta::new(Keyword::If,&['i','f']),
+        KeywordMeta::new(Keyword::Then,&['t','h','e','n']),
+        KeywordMeta::new(Keyword::Elif,&['e','l','i','f']),
+        KeywordMeta::new(Keyword::Else,&['e','l','s','e']),
+        KeywordMeta::new(Keyword::Fn,&['f','n']),
+        KeywordMeta::new(Keyword::End,&['e','n','d']),
         
         ];
-    const BEGIN_PRINUM:PriNum = PriNum::P11; // actually, we never will be used
-    const END_PRINUM:PriNum = PriNum::P0;
-    const fn info(&self)->&'static Kwi {
+    const BEGIN_PRINUM:PriNum = PriNum::P12; // actually, we never will be used
+    const END_PRINUM:PriNum = PriNum::P1;
+    const fn info(&self)->&'static KeywordMeta {
         let i = *self as usize;
         &Self::METAS[i]
     }
@@ -800,10 +826,10 @@ impl Keyword {
         let i = *self as usize;
         Self::METAS[i].name
     }
-    const fn all()->&'static[Kwi] {
+    const fn all()->&'static[KeywordMeta] {
         Self::METAS.as_slice()
     }
-    fn iter() -> std::slice::Iter<'static, Kwi> {
+    fn iter() -> std::slice::Iter<'static, KeywordMeta> {
         Self::METAS.iter()
     }
 }
@@ -890,9 +916,17 @@ impl<T:ToChars> MatchStart<T> for [T]  {
 // }
 // impl<E:ToChars,T:Iterator<Item=E>> MatchStarts<E> for T where {}
 
+// end of sub programm
+// #[derive(Debug,Clone, Copy)]
+// struct End;
+// impl End {
+//     const PRINUM:PriNum = PriNum::P1;
+// }
+
+// end of progamm
 #[derive(Debug,Clone, Copy)]
-struct End;
-impl End {
+struct Exit;
+impl Exit {
     const PRINUM:PriNum = PriNum::P0;
 }
 // 后面考虑加入啥（数据是引用，这样能减轻数据的传递）
@@ -904,7 +938,8 @@ enum Token {
     Pr(Bracket),
     Fndecl(String,Vec<String>),
     Kw(Keyword),
-    End(End),
+    // End(End),
+    Exit(Exit),
 }
 
 #[derive(Debug,Clone,PartialEq)]
@@ -919,7 +954,7 @@ enum DataWhere {
 
 #[derive(Debug,Clone,Copy,PartialEq, PartialOrd)]
 enum PriNum {
-    P0, P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, P11
+    P0, P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, P11, P12
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -954,8 +989,8 @@ struct Auxi {
 
 impl Aux {
     const METAS: [Auxi; 2] = [
-        Aux::new(Aux::Comma,AuxComma!(),PriNum::P1,RetRule::Ignore),
-        Aux::new(Aux::Semicolon,AuxSemiColon!(),PriNum::P1,RetRule::None),
+        Aux::new(Aux::Comma,AuxComma!(),PriNum::P2,RetRule::Ignore),
+        Aux::new(Aux::Semicolon,AuxSemiColon!(),PriNum::P2,RetRule::None),
     ];
     // const fn len() -> usize {
     //     Self::METAS.len()
@@ -1006,10 +1041,10 @@ impl ToChars for Opi {
     }
 }
 
-fn value_of(symbol:&BTreeMap<String,Et>,d:&Data)->Et {
+fn value_of(symbols:&BTreeMap<String,Et>,d:&Data)->Et {
     let value = match d {
         Data::Val(e) => e,
-        Data::Sym(e) => &symbol[e],
+        Data::Sym(e) => &symbols[e],
     };
     *value
 }
@@ -1217,36 +1252,33 @@ fn op_not (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
 // fn start_with(str:&[char],sub:&[char],)->()
 // 如何初始化这个，的确得想想，Lazystatic好呀，不用锁，最长匹配优先
 const OPS:[Opi;18] = [
-    // Opi::new(Sym::Str(&[',']),Act::Aux(","),PriNum::P1,DataWhere::Zero,Ret::None),
-    // Opi::new(Sym::Str(&[';']),Act::Aux(";"),PriNum::P1,DataWhere::Zero,Ret::None),
+    Opi::new(Sym::Str(&['=','=']),Act::Eq(op_eq),PriNum::P7,DataWhere::Any(2),Ret::Value),
+    Opi::new(Sym::Str(&['=']),Act::Ass(op_assign),PriNum::P3,DataWhere::Any(2),Ret::Value),
 
-    Opi::new(Sym::Str(&['=','=']),Act::Eq(op_eq),PriNum::P6,DataWhere::Any(2),Ret::Value),
-    Opi::new(Sym::Str(&['=']),Act::Ass(op_assign),PriNum::P2,DataWhere::Any(2),Ret::Value),
+    Opi::new(Sym::Str(&['o','r']),Act::Or(op_or),PriNum::P4,DataWhere::Any(2),Ret::Value),
 
-    Opi::new(Sym::Str(&['o','r']),Act::Or(op_or),PriNum::P3,DataWhere::Any(2),Ret::Value),
+    Opi::new(Sym::Str(&['a','n','d']),Act::And(op_and),PriNum::P5,DataWhere::Any(2),Ret::Value),
 
-    Opi::new(Sym::Str(&['a','n','d']),Act::And(op_and),PriNum::P4,DataWhere::Any(2),Ret::Value),
+    Opi::new(Sym::Str(&['>','=']),Act::Ge(op_ge),PriNum::P6,DataWhere::Any(2),Ret::Value),
+    Opi::new(Sym::Str(&['>']),Act::Gt(op_gt),PriNum::P6,DataWhere::Any(2),Ret::Value),
+    Opi::new(Sym::Str(&['<','=']),Act::Le(op_le),PriNum::P6,DataWhere::Any(2),Ret::Value),
+    Opi::new(Sym::Str(&['<']),Act::Lt(op_lt),PriNum::P6,DataWhere::Any(2),Ret::Value),
 
-    Opi::new(Sym::Str(&['>','=']),Act::Ge(op_ge),PriNum::P5,DataWhere::Any(2),Ret::Value),
-    Opi::new(Sym::Str(&['>']),Act::Gt(op_gt),PriNum::P5,DataWhere::Any(2),Ret::Value),
-    Opi::new(Sym::Str(&['<','=']),Act::Le(op_le),PriNum::P5,DataWhere::Any(2),Ret::Value),
-    Opi::new(Sym::Str(&['<']),Act::Lt(op_lt),PriNum::P5,DataWhere::Any(2),Ret::Value),
+    Opi::new(Sym::Str(&['!','=']),Act::Ne(op_ne),PriNum::P7,DataWhere::Any(2),Ret::Value),
+    // Opi::new(Sym::Str(&['=','=']),Act::Eq(eq),PriNum::P7,DataWhere::Any(2),Ret::Value),
+    Opi::new(Sym::Str(&['c','m','p']),Act::Cmp(op_cmp),PriNum::P7,DataWhere::Any(2),Ret::Value),
 
-    Opi::new(Sym::Str(&['!','=']),Act::Ne(op_ne),PriNum::P6,DataWhere::Any(2),Ret::Value),
-    // Opi::new(Sym::Str(&['=','=']),Act::Eq(eq),PriNum::P6,DataWhere::Any(2),Ret::Value),
-    Opi::new(Sym::Str(&['c','m','p']),Act::Cmp(op_cmp),PriNum::P6,DataWhere::Any(2),Ret::Value),
+    Opi::new(Sym::Str(&['s','u','m']),Act::Opfn(op_sum),PriNum::P8,DataWhere::Any(-1),Ret::Value),
+    Opi::new(Sym::Str(&['a','v','g']),Act::Opfn(op_avg),PriNum::P8,DataWhere::Any(-1),Ret::Value),
 
-    Opi::new(Sym::Str(&['s','u','m']),Act::Opfn(op_sum),PriNum::P7,DataWhere::Any(-1),Ret::Value),
-    Opi::new(Sym::Str(&['a','v','g']),Act::Opfn(op_avg),PriNum::P7,DataWhere::Any(-1),Ret::Value),
+    Opi::new(Sym::Str(&['+']),Act::Add(op_add),PriNum::P9,DataWhere::Any(2),Ret::Value),
+    Opi::new(Sym::Str(&['-']),Act::Sub(op_sub),PriNum::P9,DataWhere::Any(2),Ret::Value),
 
-    Opi::new(Sym::Str(&['+']),Act::Add(op_add),PriNum::P8,DataWhere::Any(2),Ret::Value),
-    Opi::new(Sym::Str(&['-']),Act::Sub(op_sub),PriNum::P8,DataWhere::Any(2),Ret::Value),
+    Opi::new(Sym::Str(&['*']),Act::Mul(op_mul),PriNum::P10,DataWhere::Any(2),Ret::Value),
+    Opi::new(Sym::Str(&['/']),Act::Div(op_div),PriNum::P10,DataWhere::Any(2),Ret::Value),
 
-    Opi::new(Sym::Str(&['*']),Act::Mul(op_mul),PriNum::P9,DataWhere::Any(2),Ret::Value),
-    Opi::new(Sym::Str(&['/']),Act::Div(op_div),PriNum::P9,DataWhere::Any(2),Ret::Value),
-
-    Opi::new(Sym::Str(&['n','o','t']),Act::Not(op_not),PriNum::P10,DataWhere::Any(1),Ret::Value),
-    Opi::new(Sym::Str(&['c','n','t']),Act::Opfn(op_cnt),PriNum::P10,DataWhere::Any(-1),Ret::Value),
+    Opi::new(Sym::Str(&['n','o','t']),Act::Not(op_not),PriNum::P11,DataWhere::Any(1),Ret::Value),
+    Opi::new(Sym::Str(&['c','n','t']),Act::Opfn(op_cnt),PriNum::P11,DataWhere::Any(-1),Ret::Value),
     //     Opi::new(Sym::Str(&['<','=']),Act::Le(le),PriNum::Three,DataWhere::Any(2),Ret::Value),
     ];
     // const OOO: [Opi;2] = ops();
@@ -1355,13 +1387,14 @@ enum Data {
     Sym(String)
 }
 struct Frame {
+    condition: Option<bool>,
     data: Vec<Data>,
     opi: Vec<(Opi,Para)>
 }
 
 impl Frame {
     fn new() -> Self {
-        Self {data:Vec::new(),opi:Vec::new()}
+        Self {condition:None,data:Vec::new(),opi:Vec::new()}
     }
 }
 
@@ -1463,7 +1496,7 @@ const fn is_sym_start(c:&char)->bool {
 fn token_next<'a>(src:&'a[char], frame_empty:bool,codes:&FnCodeMap)->Option<(Token,&'a[char])> {
     // skip ignored char
     let (src,Some(ref c)) = skip_blank(src) else {
-        return Some((Token::End(End),src));
+        return Some((Token::Exit(Exit),src));
     };
 
     // 处理 开始的正负号，先不以单目运算符进行解析
@@ -1517,10 +1550,9 @@ fn token_next<'a>(src:&'a[char], frame_empty:bool,codes:&FnCodeMap)->Option<(Tok
             }
 
             // <7> if then elif else end
-            // if let Some((chars,corr)) = CORRESPOND_IF_UT.iter().find(|e|e.0 == sym) {
-            // if let (Some((_a,token)),src_rest) = CORRESPOND_IF_UT.match_starts(sym, None) {
-            if let (Some(Kwi{id,..}),src_rest) = Keyword::all().match_starts(sym, None) {
+            if let (Some(KeywordMeta{id,..}),_src_rest) = Keyword::all().match_starts(sym, None) {
                 // assert_eq!(chars.len()+src_rest.len(),src.len());
+                debug_assert!(_src_rest.is_empty());
                 return Some((Token::Kw(id.clone()),src_rest));
             }
 
@@ -1552,18 +1584,12 @@ fn token_next<'a>(src:&'a[char], frame_empty:bool,codes:&FnCodeMap)->Option<(Tok
 }
 
 #[derive(Clone, Copy,Debug)]
-enum Ifflow { If,Then,Elif,Else,End }
+enum Ifflow { If,Then,Elif,Ifelse,Else,End }
 impl Ifflow {
-    const METAS: [(Ifflow, PriNum); 5] = [
-        (Ifflow::If,PriNum::P0),
-        (Ifflow::Then,PriNum::P0),
-        (Ifflow::Elif,PriNum::P0),
-        (Ifflow::Else,PriNum::P0),
-        (Ifflow::End,PriNum::P0),
-    ];
-    const fn prinum(&self)->PriNum {
-        Self::METAS[*self as usize].1
-    }
+    // then elif else
+    const INNER_PRINUM: PriNum = PriNum::P2; 
+    // end
+    const END_PRINUM: PriNum = PriNum::P1; 
 }
 // #[derive(Clone, Copy)]
 // enum Iffflow { Iff,Then,Else }
@@ -1597,7 +1623,6 @@ fn ast_correspond(token:Token, whole:&[char], src:&[char], correspond:&mut Corre
                     // we can put an advice to rust 
                     // because the ref does not use after push
                     // correspond.push(CorreE::Fnast(Fnast::End));
-                    // let name = name.clone();
                     let ps = ps.clone();
                     let body = &whole[whole.len()-index..whole.len()-src.len()];
                     let body = body.iter().map(|e|*e).collect::<Vec<char>>();
@@ -1607,10 +1632,9 @@ fn ast_correspond(token:Token, whole:&[char], src:&[char], correspond:&mut Corre
                 _ => {} // ignore
             }
             if is_fndef_end {
-                // correspond.pop(CorreE::Fnast(Fnast::End));
                 correspond.pop(CorreE::Aux(Aux::Comma));
                 correspond.pop_verify();
-                CorreE::Ignore
+                CorreE::IgnoreNextSteps
             } else {
                 CorreE::Aux(Aux::Comma)
             }
@@ -1618,64 +1642,75 @@ fn ast_correspond(token:Token, whole:&[char], src:&[char], correspond:&mut Corre
 
         Token::Fndecl(name,ps) => {
             correspond.push(CorreE::Fnast(Fnast::Decl(name, ps, src.len())));
-            correspond.push_verify();
-            CorreE::Ignore
+            correspond.push_verify(true);
+            CorreE::IgnoreNextSteps
         }
 
         Token::Kw(Keyword::If) => {
-            // correspond.push(CorreE::Ifc(Ifflow::If));
             correspond.push(CorreE::Ifc(Ifflow::If));
-            CorreE::Ifc(Ifflow::If)
+            correspond.push_verify(correspond.is_verifying());
+            CorreE::Ifc(Ifflow::If) // we start a sub, use this
         }
         Token::Kw(Keyword::Then) => {
             match correspond.last() {
                 Some(CorreE::Ifc(Ifflow::If|Ifflow::Elif)) => {
-                    correspond.pop(CorreE::Ifc(Ifflow::Then));
-                    // correspond.push(CorreE::Ifc(Ifflow::Then));
-                    correspond.push(CorreE::Ifc(Ifflow::Then));
+                    correspond.update(CorreE::Ifc(Ifflow::Then));
+                    CorreE::Ifc(Ifflow::Then)
                 }
-                _ => {}
+                _ => panic!("the script is not obeyed by rules"),
             }
-            CorreE::Ifc(Ifflow::Then)
         }
         Token::Kw(Keyword::Elif) => {
             if let Some(CorreE::Ifc(Ifflow::Then)) = correspond.last() {
-                correspond.pop(CorreE::Ifc(Ifflow::Elif));
-                // correspond.push(CorreE::Ifc(Ifflow::Elif));
-                correspond.push(CorreE::Ifc(Ifflow::Elif));
+                correspond.update(CorreE::Ifc(Ifflow::Elif));
+                correspond.set_verify(correspond.was_true());
+                CorreE::IgnoreNextSteps
             } else {
-                panic!("the if-then-elif grammer error");
+                panic!("the script is not obeyed by rules");
             }
-            CorreE::Ifc(Ifflow::Elif)
         }
         Token::Kw(Keyword::Else) => {
             match correspond.last() {
-                Some(CorreE::Ifc(Ifflow::If|Ifflow::Then|Ifflow::Elif)) => {
-                    correspond.pop(CorreE::Ifc(Ifflow::Else));
-                    correspond.push(CorreE::Ifc(Ifflow::Else));
+                Some(CorreE::Ifc(Ifflow::Then)) => {
+                    correspond.update(CorreE::Ifc(Ifflow::Else));
+                    if correspond.is_running() || correspond.was_true() {
+                        correspond.set_verify(true);
+                        CorreE::IgnoreNextSteps
+                    } else {
+                        correspond.set_verify(false);
+                        debug_assert!(correspond.is_running());
+                        CorreE::IgnoreNextSteps
+                    }
+                }
+                Some(CorreE::Ifc(Ifflow::If|Ifflow::Elif)) => {
+                    correspond.update(CorreE::Ifc(Ifflow::Else));
+                    CorreE::Ifc(Ifflow::Ifelse)
                 }
                 _ => panic!("the if-then-elif grammer error"),
             }
-            CorreE::Ifc(Ifflow::Else)
         }
         Token::Kw(Keyword::End) => {
             match correspond.last() {
-                Some(CorreE::Ifc(Ifflow::Then|Ifflow::Else)) => {
-                    correspond.pop(CorreE::End(End));
-                    // correspond.push(CorreE::Ifc(Ifflow::End)); donot need to push End
+                Some(CorreE::Ifc(Ifflow::Then|Ifflow::Else|Ifflow::Elif)) => {
+                    correspond.pop(CorreE::Ifc(Ifflow::End));
+                    correspond.pop_verify();
                 }
                 _ => panic!("the if-then-elif grammer error"),
             }
-            CorreE::End(End)
+            // at present end is just used for if-then statement
+            CorreE::Ifc(Ifflow::End)
         }
-        Token::Kw(Keyword::Fn) => {CorreE::Ignore} // do nothing, this is processed in token parsing
+        Token::Kw(Keyword::Fn) => {CorreE::IgnoreNextSteps} // do nothing, this is processed in token parsing
         Token::Data(data) => {CorreE::Data(data)}, // for run todo
         Token::Op(op, para) => {CorreE::Op(op,para)}, // for run todo
 
-        Token::End(End) => {
-            // do nothing at present, we can find another concise method to compose the if fn grammer
-            CorreE::End(End)
-        } 
+        // Token::End(End) => {
+        //     // do nothing at present, we can find another concise method to compose the if fn grammer
+        //     CorreE::End(End)
+        // }
+        Token::Exit(Exit) => {
+            CorreE::Exit(Exit)
+        }
 
         // CorreE::Iffc(_) => unimplemented!("iff aaa, (bb*3);4, ccc+4, 支持这种简洁的形式，将来看看，目前先不支持，主要用于交互式计算，以简洁为主"),
 
@@ -1693,8 +1728,9 @@ fn ast_correspond(token:Token, whole:&[char], src:&[char], correspond:&mut Corre
         //     unimplemented!();
         // }
     };
+    println!("@@@ AST {:?}",correspond);
     if correspond.is_verifying() {
-        Some(CorreE::Ignore)
+        Some(CorreE::IgnoreNextSteps)
     } else {
         Some(ce)
     }
@@ -1707,44 +1743,72 @@ enum Indication {
     Pr(Bracket),
 }
 
+// enum AndTodoNext {
+//     TrueDo, FalseDo,
+// }
 enum PopSubjectMatter {
     Op(Opi,Para),
     Pr(PriNum,RetRule),
+    ConditionCalc(PriNum),
     Donot,
 }
 
 fn push_exp(corre:CorreE, frame_stack: &mut FrameVec)->PopSubjectMatter {
     match corre {
         CorreE::Fnast(_) => todo!(),
-        CorreE::Sub(Bracket::LBracket)|
-        CorreE::Ifc(Ifflow::Then|Ifflow::Elif|Ifflow::Else) => {
-            // let frame_empty: Frame = Frame::new();
-            // frame_stack.push(frame_empty);
-            push_frame(frame_stack);
-            // frame = context.frame_stack.last_mut().unwrap();
+        CorreE::Ifc(Ifflow::If) => {
+            let _ = push_frame(frame_stack).condition.insert(false);
             PopSubjectMatter::Donot
+        }
+        CorreE::Ifc(Ifflow::Then) => {
+            if frame_stack.last().unwrap().condition.is_some_and(|e|e) {
+                PopSubjectMatter::Donot
+            } else {
+                PopSubjectMatter::ConditionCalc(Ifflow::INNER_PRINUM)
+            }
+        }
+        CorreE::Ifc(Ifflow::Ifelse) => {
+            if frame_stack.last().unwrap().condition.is_some_and(|e|e) {
+                PopSubjectMatter::Donot
+            } else {
+                PopSubjectMatter::ConditionCalc(Ifflow::INNER_PRINUM)
+            }
+        }
+        CorreE::Ifc(Ifflow::Else) => {
+            if frame_stack.last().unwrap().condition.is_some_and(|e|e) {
+                PopSubjectMatter::Donot
+            } else {
+                PopSubjectMatter::Donot
+                // PopSubjectMatter::PredicateDo(Ifflow::INNER_PRINUM)
+            }
+        }
+        CorreE::Ifc(Ifflow::Elif) => {
+            if frame_stack.last().unwrap().condition.is_some_and(|e|e) {
+                PopSubjectMatter::Donot
+            } else {
+                PopSubjectMatter::Donot
+            }
+        }
+        CorreE::Ifc(Ifflow::End) => {
+            PopSubjectMatter::Pr(Ifflow::END_PRINUM, RetRule::Ignore)
         }
         CorreE::Sub(Bracket::RBracket) => {
             PopSubjectMatter::Pr(Bracket::RBracket.prinum(),RetRule::Ignore)
         }
-        CorreE::Ifc(Ifflow::If) => {
-            // do nothing
-            todo!();
-            // PopSubjectMatter::Donot
-        }
-        CorreE::Ifc(Ifflow::End) => {
-            PopSubjectMatter::Pr(Ifflow::End.prinum(), RetRule::Ignore)
+        CorreE::Sub(Bracket::LBracket) => {
+            push_frame(frame_stack);
+            PopSubjectMatter::Donot
         }
         CorreE::Aux(aux) => {
             let info: &Auxi = aux.info();
             PopSubjectMatter::Pr(info.prinum,info.retrule)
         }
         // CorreE::Comma => {
-        //     PopSubjectMatter::Pr(PriNum::P0,RetRule::Ignore)
+        //     PopSubjectMatter::Pr(PriNum::P1,RetRule::Ignore)
         // }
-        CorreE::End(End) => {
-            PopSubjectMatter::Pr(End::PRINUM, RetRule::Ignore)
-        }
+        // CorreE::End(End) => {
+        //     PopSubjectMatter::Pr(End::PRINUM, RetRule::Ignore)
+        // }
         CorreE::Data(data) => {
             push_data(data, &mut frame_stack.last_mut().unwrap().data);
             PopSubjectMatter::Donot
@@ -1759,31 +1823,49 @@ fn push_exp(corre:CorreE, frame_stack: &mut FrameVec)->PopSubjectMatter {
                 PopSubjectMatter::Op(op, para)
             }
         },
-        CorreE::Ignore => {
+        CorreE::IgnoreNextSteps => {
             assert!(false, "we should deal with condition after ast function");
             PopSubjectMatter::Donot
         }
+        CorreE::Exit(Exit) => {
+            PopSubjectMatter::Pr(Exit::PRINUM, RetRule::Ignore)
+        }
     }
 }
-
-fn dicide_todo(subject_matter:PopSubjectMatter,codes:&FnCodeMap,symbols:&mut SymbolMap, frame: &mut Frame)->Option<()> {
+enum AndTodo {
+    Try,
+    None,
+    condition_back(bool),
+}
+fn decide_todo(subject_matter:PopSubjectMatter,codes:&FnCodeMap,symbols:&mut SymbolMap, frame: &mut Frame)->AndTodo {
     match subject_matter {
         PopSubjectMatter::Op(op, param) => {
-            let cond = (op.prinum,RetRule::Ignore);
-            try_pop_exp_util(codes,symbols,frame,cond);
+            let cause = (op.prinum,RetRule::Ignore);
+            try_pop_exp_util(codes,symbols,frame,cause);
             frame.opi.push((op,param));
-            None
+            AndTodo::None
         },
         PopSubjectMatter::Pr(prinum,retrule) => {
-            let cond = (prinum,retrule);
-            try_pop_exp_util(codes,symbols,frame,cond);
-            Some(())
+            let cause = (prinum,retrule);
+            try_pop_exp_util(codes,symbols,frame,cause);
+            // P0 means the end of the program
+            if let PriNum::P0|PriNum::P1 = prinum {AndTodo::Try} else {AndTodo::None}
         }
-        PopSubjectMatter::Donot => None, // do nothing
+        PopSubjectMatter::Donot => AndTodo::None, // do nothing
+        PopSubjectMatter::ConditionCalc(prinum/*,retrule,andtodonext*/) => {
+            let cause = (prinum,RetRule::Ignore);
+            try_pop_exp_util(codes,symbols,frame,cause);
+            let data_bool = pop_last_and_clear(&mut frame.data, symbols).as_bool();
+            let Some(cond @ false) = &mut frame.condition else {
+                panic!("the condition must be some and false");
+            };
+            *cond = data_bool;
+            AndTodo::condition_back(data_bool)
+        }
     }
 }
 
-fn break_value(frame_stack: &mut FrameVec,symbols:&SymbolMap)->Option<Option<Et>> {
+fn pop_frame_or_exit(frame_stack: &mut FrameVec,symbols:&SymbolMap)->Option<Option<Et>> {
     let Some(frame) = frame_stack.last() else {
         panic!("the flow would not run here");
         return None; // the language ERR, now we just return None, future we will return Error Or panic
@@ -1798,7 +1880,6 @@ fn break_value(frame_stack: &mut FrameVec,symbols:&SymbolMap)->Option<Option<Et>
             None => None,
         };
 
-        // frame_stack.pop();
         pop_frame(frame_stack);
         if let Some(last_frame) = frame_stack.last_mut() {
             if let Some(vv) = vv {
@@ -1815,8 +1896,8 @@ fn break_value(frame_stack: &mut FrameVec,symbols:&SymbolMap)->Option<Option<Et>
     None
 }
 
-fn try_pop_exp_util(codes:&FnCodeMap,symbol:&mut SymbolMap,frame: &mut Frame, cond:(PriNum,RetRule)) {
-    let (prinum,lastret) = cond;
+fn try_pop_exp_util(codes:&FnCodeMap,symbol:&mut SymbolMap,frame: &mut Frame, cause:(PriNum,RetRule)) {
+    let (prinum,lastret) = cause;
     while let Some((last_op,_last_para)) = frame.opi.last() {
         if last_op.prinum >= prinum {
             let is_op_last = frame.opi.len()==1;
@@ -1897,6 +1978,13 @@ fn pop_exp(codes:&FnCodeMap,symbol:&mut SymbolMap,frame: &mut Frame, retrule:Ret
     Some(())
 }
 
+// if I clear all but keep the last, added here
+fn pop_last_and_clear(stack: &mut Vec<Data>, symbols:&SymbolMap)->Et {
+    let data = stack.pop().unwrap();
+    stack.clear();
+    value_of(symbols, &data)
+}
+
 fn push_data(v:Data, stack: &mut Vec<Data>) {
     println!("\t++++ push data {v:?}");
     stack.push(v);
@@ -1910,34 +1998,113 @@ fn push_fndef(fndef:Fndef, codes:&mut FnCodeMap) {
     codes.insert(fndef.name.clone(), fndef);
 }
 impl CorrespondVec {
-    fn new()->Self {
-        Self(Vec::new(),0)
+    const fn new()->Self {
+        Self {
+            corre_stack: Vec::new(),
+            verify_stack: Vec::new(),
+            condition: false,
+        }
     }
     fn last(&self)->Option<&CorreE> {
-        self.0.last()
+        self.corre_stack.last()
     }
     fn push(&mut self,corre:CorreE) {
         println!("+++ AST: {corre:?}");
-        self.0.push(corre);
+        self.corre_stack.push(corre);
     }
     fn pop(&mut self,cause:CorreE) {
-        let v = self.0.pop();
+        let v = self.corre_stack.pop();
         assert!(v.is_some());
         println!("--- AST: {v:?} due to {cause:?}");
     }
-    fn push_verify(&mut self) {
-        self.1 += 1;
-        println!("+++ AST ####### <{}>",self.1);
+    fn update(&mut self,corre:CorreE) {
+        let Some(old) = self.corre_stack.last_mut() else {
+            unreachable!("no items");
+        };
+        println!("*** AST: {corre:?}  old: {:?}",*old);
+        *old = corre;
+    }
+    fn is_verify_empty(&self)->bool {
+        self.verify_stack.is_empty()
+    }
+    fn push_verify(&mut self, verify:bool) {
+        let last = self.verify_stack.last().unwrap_or(&(false,false)); 
+        self.verify_stack.push((verify,last.0));
     }
     fn pop_verify(&mut self) {
-        assert!(self.1 > 0);
-        self.1 -= 1;
-        println!("--- AST ###### {} <{}>",if self.1==0 {"0000000"} else{"-------"},self.1);
+        // we should be sure the counter > 0
+        self.verify_stack.pop().unwrap();
     }
-    const fn is_verifying(&self) -> bool {
-        self.1 > 0
+    fn set_verify(&mut self, is_verified:bool) {
+        let Some((verified,_)) = self.verify_stack.last_mut() else {
+            unreachable!("code should not be running here");
+        };
+        let old_verified = verified.clone();
+        *verified = is_verified;
+        println!("    AST ####### {} from {}  all{:?}",is_verified,old_verified,&self.verify_stack);
+    }
+    fn is_verifying(&self) -> bool {
+        let Some(verify) = self.verify_stack.last() else {
+            unreachable!("code should not be running here");
+        };
+        verify.0 || verify.1
+    }
+    fn is_running(&self) -> bool {
+        !self.is_verifying()
+    }
+    fn is_true_todo(&self)->bool {
+        match self.corre_stack.last().unwrap() {
+            CorreE::Ifc(Ifflow::Then) => true,
+            CorreE::Ifc(Ifflow::Else|Ifflow::Ifelse) => false,
+            _ => unreachable!(),
+        }
+    }
+    const fn was_true(&self) -> bool {
+        self.condition
+    }
+    // // do_if(&mut self, predicate:bool), another define
+    // fn todo_true_is_running(&mut self) {
+    //     assert!(self.2.is_none());
+    //     self.2 = Some(true);
+    // }
+    // fn todo_false_is_running(&mut self) {
+    //     assert!(self.2.is_none());
+    //     self.2 = Some(false);
+    // }
+
+    const fn is_next_verify(inside:bool, outside:bool)->bool{
+        inside ^ outside
+    }
+    fn condition_back(&mut self, outside_cond:bool) {
+        let inside = self.is_true_todo();
+        let verified_new = Self::is_next_verify(inside,outside_cond);
+        let Some((verified,_)) = self.verify_stack.last_mut() else {
+            unreachable!("code should not be running here");
+        };
+        println!("AST: condition:{} <-- {} verified:{} <-- {}",
+            self.condition || outside_cond,self.condition,
+            verified_new,verified);
+        *verified = verified_new;
+        self.condition = self.condition || outside_cond;
     }
 }
+// fn fill_jit_predicate(correspond:&mut CorrespondVec, frame:&mut Frame, symbols:&SymbolMap) {
+//     if correspond.2.is_none() {
+//         // no action for get if statement result
+//         return ;
+//     } 
+//     assert!(correspond.is_running());
+    
+//     // if statement will consume the last value from frame data
+//     // if no data in frame, panic
+//     let last_value = frame.data.pop().unwrap();
+//     let last_value = value_of(symbols, &last_value);
+//     let Et::I32(last_value) = last_value else {
+//         panic!("should not be running here");
+//     };
+//     let last_value = last_value != 0;
+//     correspond.todo_fill(last_value);
+// }
 fn push_frame(frame_stack: &mut FrameVec)->&mut Frame {
     println!("(---> begin a new frame");
     frame_stack.push(Frame::new());
@@ -1964,8 +2131,29 @@ type FnCodeMap = BTreeMap<String,Fndef>;
 /// 5 def a Stack in Parse Exp
 /// 6 def a stack in Correspond(Vec<corre>,Vec(counter))
 /// 7 def a count in Correspond(Vec, counter) // this is the final design tick tick tick 100%
-type VerifyCount = u32;
-struct CorrespondVec(Vec<CorreE>,VerifyCount);
+/// 8 def a count in Correspond(Vec, bool-stack) // use one indicator for each layer, drop of the counter which let the progream be more complex 
+/// the two states are mutually exclusive
+// #[derive(Debug)]
+// enum Verify {
+//     Count(u32),
+//     Pred(bool),
+// }
+
+/// condition put in AST structure, strictly saying, we should not
+/// if we get the condition from the pop function, during the press, there
+/// will be some data push into stack, happen in else point. There is no other
+/// good method to skip it, the get will go a long way, so we need get the cond immediately! so embeded in CorreStrut
+/// we use the back channel to update it, after the action procedure
+/// this is the needed of the interpreted language
+type VerifyCount = Vec<(bool,bool)>;
+type Condition = bool;
+#[derive(Debug)]
+struct CorrespondVec {
+    corre_stack: Vec<CorreE>,
+    verify_stack: VerifyCount,
+    condition: Condition,
+}
+
 #[derive(Clone, Copy)]
 enum Bound {
     Begin,End,
@@ -1989,12 +2177,13 @@ enum CorreE {
     Ifc(Ifflow),
     // Iffc(Iffflow),
     Aux(Aux),//SemiColon Comma,
-    End(End),
+    // End(End),
+    Exit(Exit),
     // action part
     Data(Data),
     Op(Opi,Para),
     // above which does not need to be passed to push
-    Ignore,
+    IgnoreNextSteps,
     // Lit(Verify),
 }
 struct Context {
