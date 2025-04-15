@@ -1,29 +1,6 @@
 use std::collections::BTreeMap;
 
 #[test]
-fn test_enun_next() {
-    const fn next_pri(p:PriNum)->PriNum {
-        match p {
-            PriNum::P0 => PriNum::P1,
-            PriNum::P1 => PriNum::P2,
-            PriNum::P2 => PriNum::P3,
-            PriNum::P3 => PriNum::P4,
-            PriNum::P4 => PriNum::P5,
-            PriNum::P5 => PriNum::P5,
-            PriNum::P6 => PriNum::P7,
-            PriNum::P7 => PriNum::P8,
-            PriNum::P8 => PriNum::P9,
-            PriNum::P9 => PriNum::P10,
-            PriNum::P10 => PriNum::P11,
-            PriNum::P11 => unreachable!(),
-            PriNum::P12 => unimplemented!(),
-        }
-    }
-    const a:PriNum=PriNum::P9;
-    const BB: [PriNum;2] = [{a},next_pri(a)];
-}
-
-#[test]
 pub fn test() {
     // let s = "1万3百20";
     // let s = "-5 * ( ( -3 + 6 ) )";
@@ -49,8 +26,8 @@ pub fn test() {
     // let s = "sum 2 3 4";
     // let s = "\r";
     // let s = "3+5*2";
-    let s = "if 1-1 then 3 + 4 end";
-    // let s = "if 0 then 2 elif 3 then 4 else 5 end";
+    let s = "if 0  else 9 end";
+    let s = "if 1  then if 1 else 22 end elif 3 then 4 else 5 end";
     
     let s = s.chars().collect::<Box<[char]>>();
     let s = s.as_ref();
@@ -1649,6 +1626,7 @@ fn ast_correspond(token:Token, whole:&[char], src:&[char], correspond:&mut Corre
         Token::Kw(Keyword::If) => {
             correspond.push(CorreE::Ifc(Ifflow::If));
             correspond.push_verify(correspond.is_verifying());
+            correspond.push_condition(false);
             CorreE::Ifc(Ifflow::If) // we start a sub, use this
         }
         Token::Kw(Keyword::Then) => {
@@ -1694,6 +1672,7 @@ fn ast_correspond(token:Token, whole:&[char], src:&[char], correspond:&mut Corre
                 Some(CorreE::Ifc(Ifflow::Then|Ifflow::Else|Ifflow::Elif)) => {
                     correspond.pop(CorreE::Ifc(Ifflow::End));
                     correspond.pop_verify();
+                    correspond.pop_condition();
                 }
                 _ => panic!("the if-then-elif grammer error"),
             }
@@ -2002,7 +1981,7 @@ impl CorrespondVec {
         Self {
             corre_stack: Vec::new(),
             verify_stack: Vec::new(),
-            condition: false,
+            condition_stack: Vec::new(),
         }
     }
     fn last(&self)->Option<&CorreE> {
@@ -2059,9 +2038,10 @@ impl CorrespondVec {
             _ => unreachable!(),
         }
     }
-    const fn was_true(&self) -> bool {
-        self.condition
+    fn was_true(&self) -> bool {
+        self.condition_stack.last().unwrap().clone()
     }
+    // fn 
     // // do_if(&mut self, predicate:bool), another define
     // fn todo_true_is_running(&mut self) {
     //     assert!(self.2.is_none());
@@ -2075,17 +2055,27 @@ impl CorrespondVec {
     const fn is_next_verify(inside:bool, outside:bool)->bool{
         inside ^ outside
     }
+    fn push_condition(&mut self,cond:bool) {
+        self.condition_stack.push(cond)
+    }
+    fn pop_condition(&mut self) {
+        self.condition_stack.pop().unwrap();
+    }
+    fn condition(&self)->bool {
+        self.condition_stack.last().unwrap().clone()
+    }
     fn condition_back(&mut self, outside_cond:bool) {
         let inside = self.is_true_todo();
         let verified_new = Self::is_next_verify(inside,outside_cond);
+        let condition_curr = self.condition();
         let Some((verified,_)) = self.verify_stack.last_mut() else {
             unreachable!("code should not be running here");
         };
         println!("AST: condition:{} <-- {} verified:{} <-- {}",
-            self.condition || outside_cond,self.condition,
+            condition_curr || outside_cond,condition_curr,
             verified_new,verified);
         *verified = verified_new;
-        self.condition = self.condition || outside_cond;
+        *self.condition_stack.last_mut().unwrap() = condition_curr || outside_cond;
     }
 }
 // fn fill_jit_predicate(correspond:&mut CorrespondVec, frame:&mut Frame, symbols:&SymbolMap) {
@@ -2146,12 +2136,12 @@ type FnCodeMap = BTreeMap<String,Fndef>;
 /// we use the back channel to update it, after the action procedure
 /// this is the needed of the interpreted language
 type VerifyCount = Vec<(bool,bool)>;
-type Condition = bool;
+type Condition = Vec<bool>;
 #[derive(Debug)]
 struct CorrespondVec {
     corre_stack: Vec<CorreE>,
     verify_stack: VerifyCount,
-    condition: Condition,
+    condition_stack: Condition,
 }
 
 #[derive(Clone, Copy)]
