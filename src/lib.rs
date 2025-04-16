@@ -26,8 +26,9 @@ pub fn test() {
     // let s = "sum 2 3 4";
     // let s = "\r";
     // let s = "3+5*2";
-    let s = "if 0  else 9 end";
-    let s = "if 1  then if 1 else 22 end elif 3 then 4 else 5 end";
+    // let s = "if 0 else 9 end";
+    // let s = "if 1 then if 1 else 22 end elif 3 then 4 else 5 end";
+    let s = "i=1; while i<2 { i=i+1 }";
     
     let s = s.chars().collect::<Box<[char]>>();
     let s = s.as_ref();
@@ -93,7 +94,7 @@ fn parse_exp(context: &mut Context, src: &[char])->Option<Et> {
     }
     let mut src = src;
 
-    println!("src: {src:?}");
+    println!("src: {src:?}", src=String::from_iter(src));
     println!("@@@ AST {:?}",context.correspond);
 
 
@@ -106,15 +107,20 @@ fn parse_exp(context: &mut Context, src: &[char])->Option<Et> {
             return None;
         };
         if let Token::Op(op,para) = &token {
-            println!("token is {:?} src {src_rest:?}", (&op.name,&op.act,para));
+            println!("token is {:?} src {:?}", (&op.name,&op.act,para),String::from_iter(src_rest));
         } else {
-            println!("token is {token:?} src {src_rest:?}", );
+            println!("token is {token:?} src {:?}", String::from_iter(src_rest));
         };
         let Some(corre) = ast_correspond(token, whole, src_rest, &mut context.correspond, &mut context.fn_codes) else {
             // error
             return None;
         };
-        src = src_rest;
+        if let Some(offset) = context.correspond.relocate_offset {
+            src = &whole[offset..];
+            context.correspond.relocate_offset = None;
+        } else {
+            src = src_rest;
+        }
         if let CorreE::IgnoreNextSteps = corre {
             continue;
         }
@@ -125,7 +131,7 @@ fn parse_exp(context: &mut Context, src: &[char])->Option<Et> {
         let frame = frame_stack.last_mut().unwrap();
         let and_todo = decide_todo(subject_matter, &context.fn_codes,&mut context.symbols,frame);
         // echo to the ast_correspond, in order to keep the clear of structure
-        let Some(_) = ast_condition_back(and_todo, &mut context.correspond) else {
+        let Some(_) = ast_control_back(and_todo, &mut context.correspond) else {
             continue;
         };
         // if we return value from loop, the frame_stack will be called mut used 2 times
@@ -138,12 +144,16 @@ fn parse_exp(context: &mut Context, src: &[char])->Option<Et> {
     exit_value
 }
 
-fn ast_condition_back(and_todo:AndTodo, correspond:&mut CorrespondVec)->Option<()> {
+fn ast_control_back(and_todo:AndTodo, correspond:&mut CorrespondVec)->Option<()> {
     match and_todo {
         AndTodo::Try => Some(()), // try to do pop_frame_or_exit
         AndTodo::None => None,
-        AndTodo::condition_back(outside) => {
+        AndTodo::ConditionBack(outside) => {
             correspond.condition_back(outside);
+            None
+        }
+        AndTodo::BreakBack => {
+            correspond.break_end_back();
             None
         }
     }
@@ -207,7 +217,7 @@ fn parse_exp(context: &mut Context, src: &[char], just_grammer:bool)->Option<Et>
                 }
             }
 
-            Token::Corr(CorreE::Sub(Bracket::LBracket)) => {
+            Token::Corr(CorreE::Sub(Bracket::LRound)) => {
                 src = src_rest;
                 println!("====> {:?}",src);
                 if just_grammer {continue;}
@@ -217,7 +227,7 @@ fn parse_exp(context: &mut Context, src: &[char], just_grammer:bool)->Option<Et>
                 None
             }
 
-            Token::Corr(CorreE::Sub(Bracket::RBracket)) => {
+            Token::Corr(CorreE::Sub(Bracket::RRound)) => {
                 src = src_rest;
                 println!("=====> ****** {src:?}");
                 Some((PriNum::P0,RetRule::Ignore))
@@ -704,17 +714,21 @@ impl Act {
             _ => unreachable!(),
         }
     }
-    
 }
+
 #[derive(Clone,Copy,Debug)]
 enum Bracket {
-    LBracket,
-    RBracket,
+    LRound,
+    RRound,
+    // LCurly,
+    // RCurly,
 }
 impl Bracket {
     const METAS: [(Token,char,PriNum); 2] = [
-        (Token::Pr(Bracket::LBracket), '(', PriNum::P12),
-        (Token::Pr(Bracket::RBracket), ')', PriNum::P1)
+        (Token::Pr(Bracket::LRound), '(', PriNum::P12),
+        (Token::Pr(Bracket::RRound), ')', PriNum::P1),
+        // (Token::Pr(Bracket::LCurly), '{', PriNum::P12),
+        // (Token::Pr(Bracket::RCurly), '}', PriNum::P1),
     ];
     const fn info(&self)->&(Token,char,PriNum) {
         &Self::METAS[*self as usize]
@@ -723,6 +737,25 @@ impl Bracket {
         self.info().2
     }
 }
+
+#[derive(Clone,Copy,Debug)]
+enum Curly {
+    LCurly,
+    RCurly,
+}
+impl Curly {
+    const METAS: [(Token,char,PriNum); 2] = [
+        (Token::Curly(Curly::LCurly), '{', PriNum::P12),
+        (Token::Curly(Curly::RCurly), '}', PriNum::P1),
+    ];
+    const fn info(&self)->&(Token,char,PriNum) {
+        &Self::METAS[*self as usize]
+    }
+    const fn prinum(&self)->PriNum {
+        self.info().2
+    }
+}
+
 
 // struct Hori(bool);
 // impl Hori {
@@ -762,7 +795,7 @@ type Schars = &'static[char];
 #[derive(Clone, Copy,Debug)]
 enum Keyword
 {
-    If,Then,Elif,Else,Fn,End
+    If,Then,Elif,Else,Fn,End,While,Continue,Break,
 }
 struct KeywordMeta {
     id: Keyword,
@@ -784,14 +817,16 @@ impl ToChars for &KeywordMeta {
     }
 }
 impl Keyword {
-    const METAS: [KeywordMeta; 6] = [
+    const METAS: [KeywordMeta; 9] = [
         KeywordMeta::new(Keyword::If,&['i','f']),
         KeywordMeta::new(Keyword::Then,&['t','h','e','n']),
         KeywordMeta::new(Keyword::Elif,&['e','l','i','f']),
         KeywordMeta::new(Keyword::Else,&['e','l','s','e']),
         KeywordMeta::new(Keyword::Fn,&['f','n']),
         KeywordMeta::new(Keyword::End,&['e','n','d']),
-        
+        KeywordMeta::new(Keyword::While,&['w','h','i','l','e']),
+        KeywordMeta::new(Keyword::Continue,&['c','o','n','t','i','n','u','e']),
+        KeywordMeta::new(Keyword::Break,&['b','r','e','a','k']),
         ];
     const BEGIN_PRINUM:PriNum = PriNum::P12; // actually, we never will be used
     const END_PRINUM:PriNum = PriNum::P1;
@@ -913,6 +948,7 @@ enum Token {
     Aux(Aux),
     Op(Opi,Para),
     Pr(Bracket),
+    Curly(Curly),
     Fndecl(String,Vec<String>),
     Kw(Keyword),
     // End(End),
@@ -931,6 +967,7 @@ enum DataWhere {
 
 #[derive(Debug,Clone,Copy,PartialEq, PartialOrd)]
 enum PriNum {
+    // P0: exit; P1: pop frame; P2: minimum action num
     P0, P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, P11, P12
 }
 
@@ -1125,8 +1162,8 @@ fn op_div (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
     v1/v2
 }
 fn op_assign (symbol:&mut BTreeMap<String,Et>,d:&[Data])->Et {
-    let v2 = *d[0].as_et();
-    let _old = match &d[1] {
+    let v2 = *d[1].as_et();
+    let _old = match &d[0] {
         Data::Sym(e) => symbol.insert(e.clone(), v2),
         _ => panic!(""),
     };
@@ -1177,48 +1214,48 @@ fn op_fn_do(fn_name:&str,codes:&FnCodeMap,symbol:&BTreeMap<String,Et>,data:&[Dat
     et
 }
 fn op_gt (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
-    let v1 = value_of(symbol, &d[1]);
-    let v2 = value_of(symbol, &d[0]);
+    let v1 = value_of(symbol, &d[0]);
+    let v2 = value_of(symbol, &d[1]);
     Et::I32((v1 > v2) as i32)
 }
 fn op_ge (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
-    let v1 = value_of(symbol, &d[1]);
-    let v2 = value_of(symbol, &d[0]);
+    let v1 = value_of(symbol, &d[0]);
+    let v2 = value_of(symbol, &d[1]);
     Et::I32((v1 >= v2) as i32)
 }
 fn op_lt (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
-    let v1 = value_of(symbol, &d[1]);
-    let v2 = value_of(symbol, &d[0]);
+    let v1 = value_of(symbol, &d[0]);
+    let v2 = value_of(symbol, &d[1]);
     Et::I32((v1 < v2) as i32)
 }
 fn op_le (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
-    let v1 = value_of(symbol, &d[1]);
-    let v2 = value_of(symbol, &d[0]);
+    let v1 = value_of(symbol, &d[0]);
+    let v2 = value_of(symbol, &d[1]);
     Et::I32((v1 <= v2) as i32)
 }
 fn op_eq (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
-    let v1 = value_of(symbol, &d[1]);
-    let v2 = value_of(symbol, &d[0]);
+    let v1 = value_of(symbol, &d[0]);
+    let v2 = value_of(symbol, &d[1]);
     Et::I32((v1 == v2) as i32)
 }
 fn op_ne (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
-    let v1 = value_of(symbol, &d[1]);
-    let v2 = value_of(symbol, &d[0]);
+    let v1 = value_of(symbol, &d[0]);
+    let v2 = value_of(symbol, &d[1]);
     Et::I32((v1 != v2) as i32)
 }
 fn op_cmp (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
-    let v1 = value_of(symbol, &d[1]);
-    let v2 = value_of(symbol, &d[0]);
+    let v1 = value_of(symbol, &d[0]);
+    let v2 = value_of(symbol, &d[1]);
     Et::I32((v1.partial_cmp(&v2).unwrap()) as i32)
 }
 fn op_and (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
-    let v1 = value_of(symbol, &d[1]);
-    let v2 = value_of(symbol, &d[0]);
+    let v1 = value_of(symbol, &d[0]);
+    let v2 = value_of(symbol, &d[1]);
     Et::I32((v1.as_bool() && v2.as_bool()) as i32)
 }
 fn op_or (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
-    let v1 = value_of(symbol, &d[1]);
-    let v2 = value_of(symbol, &d[0]);
+    let v1 = value_of(symbol, &d[0]);
+    let v2 = value_of(symbol, &d[1]);
     Et::I32((v1.as_bool() || v2.as_bool()) as i32)
 }
 fn op_not (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
@@ -1229,6 +1266,7 @@ fn op_not (symbol:&BTreeMap<String,Et>,d:&[Data])->Et {
 // fn start_with(str:&[char],sub:&[char],)->()
 // 如何初始化这个，的确得想想，Lazystatic好呀，不用锁，最长匹配优先
 const OPS:[Opi;18] = [
+    // put here, for the longest match
     Opi::new(Sym::Str(&['=','=']),Act::Eq(op_eq),PriNum::P7,DataWhere::Any(2),Ret::Value),
     Opi::new(Sym::Str(&['=']),Act::Ass(op_assign),PriNum::P3,DataWhere::Any(2),Ret::Value),
 
@@ -1238,6 +1276,7 @@ const OPS:[Opi;18] = [
 
     Opi::new(Sym::Str(&['>','=']),Act::Ge(op_ge),PriNum::P6,DataWhere::Any(2),Ret::Value),
     Opi::new(Sym::Str(&['>']),Act::Gt(op_gt),PriNum::P6,DataWhere::Any(2),Ret::Value),
+    // put here for the longest match
     Opi::new(Sym::Str(&['<','=']),Act::Le(op_le),PriNum::P6,DataWhere::Any(2),Ret::Value),
     Opi::new(Sym::Str(&['<']),Act::Lt(op_lt),PriNum::P6,DataWhere::Any(2),Ret::Value),
 
@@ -1397,8 +1436,14 @@ const fn is_char_or_digit(c:char)->bool {
 const fn not_char_and_digit(c:char)->bool {
     !is_char_or_digit(c)
 }
+const fn is_blank_or_lcurly(c:char)->bool {
+    match c {
+        ' '|'\t'|'\r'|'\n'|'{' => true,
+        _ => false,
+    }
+}
 
-const SKIP_CHARS:[char;3] = [' ','\r','\n'];
+const SKIP_CHARS:[char;4] = [' ','\t','\r','\n'];
 
 // struct Unit<'a> {
 //     ut: Token,
@@ -1458,9 +1503,14 @@ fn starts_with_and<'a>(main:&'a[char],sub:&[char],char_test:Option<CharTest>)->(
         let Some(c) = main.get(sub.len()) else {
             return (true,&[]);
         };
-        return (!char_test(*c),&main[sub.len()..]);
+        return (char_test(*c),&main[sub.len()..]);
     }
     return (false,main);
+}
+fn test_next_token_else(src:&[char])->(bool,&[char]) {
+    let (src_next,_char_next) = skip_blank(src);
+    // the next char cond equaliverlent to parse_symbol
+    starts_with_and(src_next, Keyword::Else.name(), Some(not_char_and_digit))
 }
 const fn is_sym_start(c:&char)->bool {
     match c {
@@ -1507,10 +1557,24 @@ fn token_next<'a>(src:&'a[char], frame_empty:bool,codes:&FnCodeMap)->Option<(Tok
             (Para::Consumed,0)
         };
         return Some((Token::Op(op.clone(),kind),&src_rest[len..]));
+
     // <3> ( )
     } else if let Some(e) = Bracket::METAS.iter().find(|e|e.1==*c) {
         assert!(src.len()>=1);
         return Some((e.0.clone(),&src[1..]))
+
+    // <3+1> { }
+    } else if let Some(e) = Curly::METAS.iter().find(|e|e.1==*c) {
+        assert!(src.len()>=1);
+        // if let Token::Curly(Curly::RCurly) = e.0 {
+        //     // <3+1+1> is jointly keyword } else
+        //     let (src_next,_char_next) = skip_blank(&src[1..]);
+        //     if let (true,src_next) = starts_with_and(src_next, Keyword::Else.name(), Some(is_blank_or_lcurly)) {
+        //         return Some((Token::Kw(Keyword::Else),src_next));
+        //     }
+        // }
+        return Some((e.0.clone(),&src[1..]))
+
     // <4|5|6|7> symbol | fndecl | fn | if then elif else end
     } else if is_sym_start(c) {
         if let Some((sym,src_rest)) = parse_symbol(src) {
@@ -1571,20 +1635,50 @@ impl Ifflow {
 // #[derive(Clone, Copy)]
 // enum Iffflow { Iff,Then,Else }
 
+#[derive(Clone, Copy,Debug)]
+enum LeadBound {
+    Head,
+    Begin,
+    End,
+}
+#[derive(Clone,Copy,Debug)]
+enum Whileflow { While(usize),Body(Bound),Continue,Break(LeadBound),Else(LeadBound),End}
+impl Whileflow {
+    const WHILE_BEGIN_PRINUM: PriNum = PriNum::P12;
+    const BODY_BEGIN_PRINUM: PriNum = PriNum::P2;
+    const BODY_END_PRINUM: PriNum = PriNum::P2;
+    const BREAK_END_PRINUM: PriNum = PriNum::P2;
+    const WHILE_END_PRINUM: PriNum = PriNum::P1;
+}
+
+// struct SrcNext(bool);
 fn ast_correspond(token:Token, whole:&[char], src:&[char], correspond:&mut CorrespondVec, codes:&mut FnCodeMap)->Option<CorreE> {
+    // match correspond.last() {
+    //     Some(CorreE::Whc(Whileflow::Body(Bound::End))) => {
+    //         if let Token::Kw(Keyword::Else) = token {
+    //             correspond.update(CorreE::Whc(Whileflow::Else(LeadBound::Head)));
+    //             return Some(CorreE::IgnoreNextSteps)
+    //         // } else {
+    //         //     // token backforward one ******, rest src do not assign to src, remind
+    //         //     assert!(false,"xxxxxxxx");
+    //         //     return Some(CorreE::Whc(Whileflow::End));
+    //         }
+    //     }
+    //     _ => (),
+    // }
     let ce = match token {
-        Token::Pr(Bracket::LBracket) => {
-            correspond.push(CorreE::Sub(Bracket::LBracket));
-            CorreE::Sub(Bracket::LBracket)
+        Token::Pr(Bracket::LRound) => {
+            correspond.push(CorreE::Sub(Bracket::LRound));
+            CorreE::Sub(Bracket::LRound)
         }
-        Token::Pr(Bracket::RBracket) => {
-            if let Some(CorreE::Sub(Bracket::LBracket)) = correspond.last() {
-                correspond.pop(CorreE::Sub(Bracket::RBracket));
+        Token::Pr(Bracket::RRound) => {
+            if let Some(CorreE::Sub(Bracket::LRound)) = correspond.last() {
+                correspond.pop(CorreE::Sub(Bracket::RRound));
             } else {
                 // Erorr return; for future
                 panic!("the backert not corresponed");
             }
-            CorreE::Sub(Bracket::RBracket)
+            CorreE::Sub(Bracket::RRound)
         }
 
         Token::Aux(Aux::Semicolon) => {
@@ -1592,11 +1686,11 @@ fn ast_correspond(token:Token, whole:&[char], src:&[char], correspond:&mut Corre
         } // ignore
 
         Token::Aux(Aux::Comma) => {
-            let mut is_fndef_end = false;
+            // let mut is_fndef_end = false; // not need anymore in 1.82
             match correspond.last() {
                 // fn def complete
                 Some(CorreE::Fnast(Fnast::Decl(name,ps,index))) => {
-                    is_fndef_end = true;
+                    // is_fndef_end = true; // not need anymore in 1.82
                     // we can put an advice to rust 
                     // because the ref does not use after push
                     // correspond.push(CorreE::Fnast(Fnast::End));
@@ -1605,16 +1699,29 @@ fn ast_correspond(token:Token, whole:&[char], src:&[char], correspond:&mut Corre
                     let body = body.iter().map(|e|*e).collect::<Vec<char>>();
                     let fndef = Fndef {name:name.clone(), ps, body};
                     push_fndef(fndef,codes);
+                    // OMG, it works well in Ver.1.82, while that can not pass the grammer check in Ver.1.81
+                    // the iteration speed is quit good
+                    correspond.pop(CorreE::Aux(Aux::Comma));
+                    correspond.pop_verify();
+                    CorreE::IgnoreNextSteps
                 }
-                _ => {} // ignore
+                Some(CorreE::Whc(Whileflow::Break(LeadBound::Begin))) => {
+                    correspond.pop(CorreE::Whc(Whileflow::Break(LeadBound::End)));
+                    // convert to While-break-end
+                    // CorreE::Whc(Whileflow::Break(LeadBound::End))
+                    // we calculate the final action until we run across the while-end
+                    correspond.set_verify(true);
+                    CorreE::IgnoreNextSteps
+                }
+                _ => CorreE::Aux(Aux::Comma) // ignore
             }
-            if is_fndef_end {
-                correspond.pop(CorreE::Aux(Aux::Comma));
-                correspond.pop_verify();
-                CorreE::IgnoreNextSteps
-            } else {
-                CorreE::Aux(Aux::Comma)
-            }
+            // and this code can be moved into the case of CorreE::Fnast position
+            // if is_fndef_end {
+            //     correspond.pop(CorreE::Aux(Aux::Comma));
+            //     correspond.pop_verify();
+            // } else {
+            //     CorreE::Aux(Aux::Comma)
+            // }
         }
 
         Token::Fndecl(name,ps) => {
@@ -1664,6 +1771,10 @@ fn ast_correspond(token:Token, whole:&[char], src:&[char], correspond:&mut Corre
                     correspond.update(CorreE::Ifc(Ifflow::Else));
                     CorreE::Ifc(Ifflow::Ifelse)
                 }
+                Some(CorreE::Whc(Whileflow::Body(Bound::End))) => {
+                    correspond.update(CorreE::Whc(Whileflow::Else(LeadBound::Head)));
+                    CorreE::IgnoreNextSteps
+                }
                 _ => panic!("the if-then-elif grammer error"),
             }
         }
@@ -1679,6 +1790,90 @@ fn ast_correspond(token:Token, whole:&[char], src:&[char], correspond:&mut Corre
             // at present end is just used for if-then statement
             CorreE::Ifc(Ifflow::End)
         }
+
+        Token::Kw(Keyword::While) => {
+            let corre = CorreE::Whc(Whileflow::While(whole.len()-src.len()));
+            correspond.push(corre.clone());
+            correspond.push_verify(correspond.is_verifying());
+            correspond.push_condition(false);
+            corre
+        }
+        Token::Curly(Curly::LCurly) => {
+            match correspond.last() {
+                Some(CorreE::Whc(Whileflow::While(_)|Whileflow::Body(Bound::End))) => {
+                    correspond.push(CorreE::Whc(Whileflow::Body(Bound::Begin)));
+                    CorreE::Whc(Whileflow::Body(Bound::Begin))
+                }
+                Some(CorreE::Whc(Whileflow::Else(LeadBound::Head))) => {
+                    correspond.update(CorreE::Whc(Whileflow::Else(LeadBound::Begin)));
+                    correspond.set_verify(correspond.was_true());
+                    CorreE::IgnoreNextSteps
+                }
+                other => panic!("the script is not obeyed by rules: {:?}",other),
+            }
+        }
+        Token::Kw(Keyword::Continue) => {
+            match correspond.last() {
+                Some(CorreE::Whc(Whileflow::Body(Bound::Begin))) => {
+                    correspond.pop(CorreE::Whc(Whileflow::Body(Bound::End)));
+                    let Some(CorreE::Whc(Whileflow::While(offset))) = correspond.last().cloned() else {
+                        unreachable!("grammer error or jit error");
+                    };
+                    correspond.set_verify(correspond.was_true());
+                    // restore the src to while begin
+                    debug_assert!(correspond.relocate_offset.is_none());
+                    let _ = correspond.relocate_offset.insert(offset);
+                    CorreE::Whc(Whileflow::Continue)
+                }
+                _ => panic!("the script is not obeyed by rules"),
+            }
+        }
+        Token::Kw(Keyword::Break) => {
+            match correspond.last() {
+                Some(CorreE::Whc(Whileflow::Body(Bound::Begin))) => {
+                    correspond.push(CorreE::Whc(Whileflow::Break(LeadBound::Begin)));
+                    CorreE::IgnoreNextSteps
+                }
+                _ => panic!("the script is not obeyed by rules"),
+            }
+        }
+        Token::Curly(Curly::RCurly) => {
+            match correspond.last() {
+                Some(CorreE::Whc(Whileflow::Body(Bound::Begin))) => {
+                    if correspond.is_running() {
+                        let CorreE::Whc(Whileflow::While(offset)) =
+                            correspond.update_and_prev(CorreE::Whc(Whileflow::Body(Bound::End))) else {
+                            unreachable!("grammer error or jit error");
+                        };
+                        // restore the src to while begin
+                        let offset = *offset;
+                        let _ = correspond.relocate_offset.insert(offset);
+                        CorreE::Whc(Whileflow::Body(Bound::End))
+                    } else if let (false, _src_next) = test_next_token_else(src) {
+                        correspond.pop(CorreE::Whc(Whileflow::End));
+                        correspond.pop_verify();
+                        correspond.pop_condition();
+                        CorreE::Whc(Whileflow::End) // actually do nothing
+                    } else {
+                        correspond.update(CorreE::Whc(Whileflow::Body(Bound::End)));
+                        // should we use the result of test-next-token-else
+                        // correspond.update(CorreE::Whc(Whileflow::Else(LeadBound::Head)));
+                        CorreE::Whc(Whileflow::Body(Bound::End))
+                    }
+                }
+                Some(CorreE::Whc(Whileflow::Else(LeadBound::Begin))) => {
+                    correspond.pop(CorreE::Whc(Whileflow::Else(LeadBound::End)));
+                    // correspond.update(CorreE::Whc(Whileflow::Else(LeadBound::End)));
+                    // CorreE::Whc(Whileflow::Else(LeadBound::End)) // looks like the state is unnecessary
+                    correspond.pop(CorreE::Whc(Whileflow::End));
+                    correspond.pop_verify();
+                    correspond.pop_condition();
+                    CorreE::Whc(Whileflow::End) // do , and pop stack
+                }
+                _ => panic!("the script is not obeyed by rules"),
+            }
+        }
+
         Token::Kw(Keyword::Fn) => {CorreE::IgnoreNextSteps} // do nothing, this is processed in token parsing
         Token::Data(data) => {CorreE::Data(data)}, // for run todo
         Token::Op(op, para) => {CorreE::Op(op,para)}, // for run todo
@@ -1715,6 +1910,13 @@ fn ast_correspond(token:Token, whole:&[char], src:&[char], correspond:&mut Corre
     }
 }
 
+// fn ast_src_relocate<'a>(corre_relocate:CorreE,whole:&'a[char],corre:CorreE)->Option<(&'a[char],CorreE)> {
+//     if let CorreE::AstsrcRelocate(offset) = corre_relocate {
+//         Some((&whole[offset..],corre))
+//     } else {
+//         None
+//     }
+// }
 enum Indication {
     Data(Data),
     Op(Opi,Para),
@@ -1729,6 +1931,7 @@ enum PopSubjectMatter {
     Op(Opi,Para),
     Pr(PriNum,RetRule),
     ConditionCalc(PriNum),
+    BreakCalc(PriNum),
     Donot,
 }
 
@@ -1771,10 +1974,43 @@ fn push_exp(corre:CorreE, frame_stack: &mut FrameVec)->PopSubjectMatter {
         CorreE::Ifc(Ifflow::End) => {
             PopSubjectMatter::Pr(Ifflow::END_PRINUM, RetRule::Ignore)
         }
-        CorreE::Sub(Bracket::RBracket) => {
-            PopSubjectMatter::Pr(Bracket::RBracket.prinum(),RetRule::Ignore)
+
+        CorreE::Whc(Whileflow::While(_)) => {
+            let _ = push_frame(frame_stack).condition.insert(false);
+            PopSubjectMatter::Pr(Whileflow::WHILE_BEGIN_PRINUM, RetRule::Ignore)
         }
-        CorreE::Sub(Bracket::LBracket) => {
+        CorreE::Whc(Whileflow::Body(Bound::Begin)) => {
+            PopSubjectMatter::ConditionCalc(Whileflow::BODY_BEGIN_PRINUM)
+        }
+        CorreE::Whc(Whileflow::Body(Bound::End)) => {
+            PopSubjectMatter::Pr(Whileflow::BODY_END_PRINUM, RetRule::Ignore)
+        }
+        CorreE::Whc(Whileflow::Continue) => {
+            unreachable!("should be done in ast procedure");
+            // PopSubjectMatter::Donot
+        }
+        CorreE::Whc(Whileflow::Break(LeadBound::Head|LeadBound::Begin)) => {
+            unreachable!("should be done in ast procedure");
+        }
+        CorreE::Whc(Whileflow::Break(LeadBound::End)) => {
+            PopSubjectMatter::BreakCalc(Whileflow::BREAK_END_PRINUM)
+        }
+        CorreE::Whc(Whileflow::Else(LeadBound::Head|LeadBound::Begin)) => {
+            unreachable!("should be done in ast procedure");
+            // PopSubjectMatter::Donot
+        }
+        CorreE::Whc(Whileflow::Else(LeadBound::End)) => {
+            unreachable!("should be done in ast procedure");
+        }
+        CorreE::Whc(Whileflow::End) => {
+            PopSubjectMatter::Pr(Whileflow::WHILE_END_PRINUM, RetRule::Ignore)
+        }
+
+
+        CorreE::Sub(Bracket::RRound) => {
+            PopSubjectMatter::Pr(Bracket::RRound.prinum(),RetRule::Ignore)
+        }
+        CorreE::Sub(Bracket::LRound) => {
             push_frame(frame_stack);
             PopSubjectMatter::Donot
         }
@@ -1802,6 +2038,10 @@ fn push_exp(corre:CorreE, frame_stack: &mut FrameVec)->PopSubjectMatter {
                 PopSubjectMatter::Op(op, para)
             }
         },
+        // CorreE::AstsrcRelocate(_) => {
+        //     assert!(false, "should be done with before the funtion call");
+        //     PopSubjectMatter::Donot
+        // }
         CorreE::IgnoreNextSteps => {
             assert!(false, "we should deal with condition after ast function");
             PopSubjectMatter::Donot
@@ -1814,7 +2054,8 @@ fn push_exp(corre:CorreE, frame_stack: &mut FrameVec)->PopSubjectMatter {
 enum AndTodo {
     Try,
     None,
-    condition_back(bool),
+    ConditionBack(bool),
+    BreakBack, // donot need the break value, just store in the frame, get the value at the while-end
 }
 fn decide_todo(subject_matter:PopSubjectMatter,codes:&FnCodeMap,symbols:&mut SymbolMap, frame: &mut Frame)->AndTodo {
     match subject_matter {
@@ -1838,8 +2079,18 @@ fn decide_todo(subject_matter:PopSubjectMatter,codes:&FnCodeMap,symbols:&mut Sym
             let Some(cond @ false) = &mut frame.condition else {
                 panic!("the condition must be some and false");
             };
-            *cond = data_bool;
-            AndTodo::condition_back(data_bool)
+            *cond = data_bool; // looks like we do not need the value in frame, we pass it to AndTodo(value)
+            AndTodo::ConditionBack(data_bool)
+        }
+        PopSubjectMatter::BreakCalc(prinum/*,retrule,andtodonext*/) => {
+            let cause = (prinum,RetRule::Ignore);
+            try_pop_exp_util(codes,symbols,frame,cause);
+            // let break_val = pop_last_and_clear(&mut frame.data, symbols);
+            // let Some(cond @ false) = &mut frame.condition else {
+                // panic!("the condition must be some and false");
+            // };
+            // *cond = data_bool;
+            AndTodo::BreakBack
         }
     }
 }
@@ -1847,7 +2098,7 @@ fn decide_todo(subject_matter:PopSubjectMatter,codes:&FnCodeMap,symbols:&mut Sym
 fn pop_frame_or_exit(frame_stack: &mut FrameVec,symbols:&SymbolMap)->Option<Option<Et>> {
     let Some(frame) = frame_stack.last() else {
         panic!("the flow would not run here");
-        return None; // the language ERR, now we just return None, future we will return Error Or panic
+        // return None; // the language ERR, now we just return None, future we will return Error Or panic
     };
     if /*cond.0 == PriNum::P0 &&*/ frame.opi.is_empty() {
         // assert_eq!(frame.data.len(),1);
@@ -1892,7 +2143,7 @@ fn pop_exp(codes:&FnCodeMap,symbol:&mut SymbolMap,frame: &mut Frame, retrule:Ret
     let Some(opi) = frame.opi.pop() else {
         return None;
     };
-    println!("\t~~~~> acton:{:?}{:?}->{:?} ({:?})", opi.0.name,opi.1,retrule,frame.data);
+    println!("\t----> acton:{:?}{:?}->{:?} ({:?})", opi.0.name,opi.1,retrule,frame.data);
     let d;
     match opi.0.data_where {
         DataWhere::Zero => d = [].as_slice(),
@@ -1982,6 +2233,7 @@ impl CorrespondVec {
             corre_stack: Vec::new(),
             verify_stack: Vec::new(),
             condition_stack: Vec::new(),
+            relocate_offset: None,
         }
     }
     fn last(&self)->Option<&CorreE> {
@@ -2002,6 +2254,14 @@ impl CorrespondVec {
         };
         println!("*** AST: {corre:?}  old: {:?}",*old);
         *old = corre;
+    }
+    fn update_and_prev(&mut self,corre:CorreE)->&CorreE {
+        let Some(old) = self.corre_stack.last_chunk_mut::<2>() else {
+            unreachable!("no items");
+        };
+        println!("*** AST: {corre:?}  old: {:?}",*old);
+        old[1] = corre;
+        &old[0]
     }
     fn is_verify_empty(&self)->bool {
         self.verify_stack.is_empty()
@@ -2033,7 +2293,8 @@ impl CorrespondVec {
     }
     fn is_true_todo(&self)->bool {
         match self.corre_stack.last().unwrap() {
-            CorreE::Ifc(Ifflow::Then) => true,
+            CorreE::Ifc(Ifflow::Then)|
+            CorreE::Whc(Whileflow::Body(Bound::Begin)) => true,
             CorreE::Ifc(Ifflow::Else|Ifflow::Ifelse) => false,
             _ => unreachable!(),
         }
@@ -2056,7 +2317,7 @@ impl CorrespondVec {
         inside ^ outside
     }
     fn push_condition(&mut self,cond:bool) {
-        self.condition_stack.push(cond)
+        self.condition_stack.push(cond);
     }
     fn pop_condition(&mut self) {
         self.condition_stack.pop().unwrap();
@@ -2075,8 +2336,19 @@ impl CorrespondVec {
             condition_curr || outside_cond,condition_curr,
             verified_new,verified);
         *verified = verified_new;
-        *self.condition_stack.last_mut().unwrap() = condition_curr || outside_cond;
+        let control = self.condition_stack.last_mut().unwrap();
+        *control = condition_curr || outside_cond;
     }
+    fn break_end_back(&mut self) {
+        self.set_verify(true);
+        let control = self.condition_stack.last().unwrap();
+        debug_assert!(control==&false,"under break, the condition and break-bool-flag must be false");
+    }
+    // fn repeate_back(&mut self) {
+    //     let Some(CorreE::Whc(Whileflow::While(offset))) = self.last() else {
+    //         unreachable!("grammer error or jit error");
+    //     };
+    // }
 }
 // fn fill_jit_predicate(correspond:&mut CorrespondVec, frame:&mut Frame, symbols:&SymbolMap) {
 //     if correspond.2.is_none() {
@@ -2084,7 +2356,7 @@ impl CorrespondVec {
 //         return ;
 //     } 
 //     assert!(correspond.is_running());
-    
+
 //     // if statement will consume the last value from frame data
 //     // if no data in frame, panic
 //     let last_value = frame.data.pop().unwrap();
@@ -2136,15 +2408,16 @@ type FnCodeMap = BTreeMap<String,Fndef>;
 /// we use the back channel to update it, after the action procedure
 /// this is the needed of the interpreted language
 type VerifyCount = Vec<(bool,bool)>;
-type Condition = Vec<bool>;
+type Condition = Vec<bool>; // cond, is_break
 #[derive(Debug)]
 struct CorrespondVec {
     corre_stack: Vec<CorreE>,
     verify_stack: VerifyCount,
     condition_stack: Condition,
+    relocate_offset: Option<usize>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy,Debug)]
 enum Bound {
     Begin,End,
 }
@@ -2165,6 +2438,7 @@ enum CorreE {
     Fnast(Fnast),
     Sub(Bracket),
     Ifc(Ifflow),
+    Whc(Whileflow),
     // Iffc(Iffflow),
     Aux(Aux),//SemiColon Comma,
     // End(End),
@@ -2173,6 +2447,7 @@ enum CorreE {
     Data(Data),
     Op(Opi,Para),
     // above which does not need to be passed to push
+    // AstsrcRelocate(usize),
     IgnoreNextSteps,
     // Lit(Verify),
 }
