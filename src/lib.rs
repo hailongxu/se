@@ -28,7 +28,7 @@ pub fn test() {
     // let s = "3+5*2";
     // let s = "if 0 else 9 end";
     // let s = "if 1 then if 1 else 22 end elif 3 then 4 else 5 end";
-    let s = "i=1; while i<2 { i=i+1 }";
+    let s = "i=1; while i<2 {i=i+1}";
     
     let s = s.chars().collect::<Box<[char]>>();
     let s = s.as_ref();
@@ -95,40 +95,94 @@ fn parse_exp(context: &mut Context, src: &[char])->Option<Et> {
     if src.is_empty() {
         return None;
     }
+
+    // here, I think many ways to solve the problem.
+    // At first, the new exp is just started by (, so, we can 
+    //      let frame = frame_stack.last_mut().unwrap();
+    //      let frame_empty = frame.data.is_empty() && frame.opi.is_empty();
+    // use frame-empty as flag of exp stared, but this method is to be proofed that 
+    // not all situation is covered. So the next,
+    //
+    // but now, we canot because situation is caused by many cases
+    // I think some way to sovle:
+    // 1, the SIGN shold be done by the token code only, which should not be helped
+    //    by other parts. After thinking, It is not easy, and is not propriate, 
+    //    because whether or not start a new exp is not deduced by token code context
+    //    Strictly speaking, it is up to the grammer. so I abandon the way finally.
+    // 2, for dependence of each code, So, under the complex situations, we set 
+    //    the flag of new exp start in AST and stored in its struct. And assign 
+    //    the flag at the main flow.
+
+    let mut sign_number = true;
     let mut src = src;
 
-    println!("src: {src:?}", src=String::from_iter(src));
-    println!("@@@ AST {:?}",context.correspond);
+    // println!("src: {src:?}", src=String::from_iter(src));
+    // println!("@@@ AST {:?}",context.correspond);
 
+    fn print_src(src:&[char],sign_number:bool) {
+        print!("---------------------------------------------------");
+        println!(" : [{sign_number}] {}",String::from_iter(src));
+    }
+    fn print_token(token:&Token) {
+        if let Token::Op(op,para) = &token {
+            println!("token: {:?}", (&op.name,&op.act,para));
+        } else {
+            println!("token: {token:?}");
+        };
+    }
+    fn print_corre(corre:&CorreE, correspond:&CorrespondVec) {
+        if let CorreE::Op(Opi{name,..}, _)= corre {
+            println!("corre: {:?}\t\t{:?}", name,correspond);
+        } else {
+            println!("corre: {:?}\t\t{:?}", corre,correspond);
+        }
+    }
+    fn print_structure(subject_matter:&PopSubjectMatter,cond_stack:&CondStack,frame:&Frame) {
+        println!("structure: {:?}\t\t{:?}",subject_matter,cond_stack);
+        println!("\t\t\tdata: {:?}",frame.data);
+    }
 
     let exit_value = loop {
-        let frame = frame_stack.last_mut().unwrap();
-        let frame_empty = frame.data.is_empty() && frame.opi.is_empty();
-
-        let Some((token, src_rest)) = token_next(src,frame_empty,&context.fn_codes) else {
+        // let frame = frame_stack.last_mut().unwrap();
+        // let frame_empty = frame.data.is_empty() && frame.opi.is_empty();
+        print_src(src,sign_number);
+        let Some((token, src_rest)) = token_next(src,sign_number,&context.fn_codes) else {
             return None; // error
         };
-        if let Token::Op(op,para) = &token {
-            println!("token is {:?} src {:?}", (&op.name,&op.act,para),String::from_iter(src_rest));
-        } else {
-            println!("token is {token:?} src {:?}", String::from_iter(src_rest));
-        };
+        print_token(&token);
+        if sign_number {
+            // here, if we get any token of data or op, means the position is not at the first, 
+            // the +/- flag is RESET to false
+            if let Token::Data(..)|Token::Op(..) = token {
+                sign_number = false;
+            }
+        }
         let Some(corre) = ast_correspond(token, whole, src_rest, &mut context.correspond, &mut context.fn_codes) else {
             return None; // error
         };
+        print_corre(&corre,&context.correspond);
+        if context.correspond.exp_start && !sign_number {
+            sign_number = true;
+        }
         src = src_rest;
         if let CorreE::IgnoreNextSteps = corre {
             continue;
         }
         let corre_size = context.correspond.len();
-        let subject_matter = push_exp(corre, corre_size, frame_stack, cond_stack);
-        if let PopSubjectMatter::Again(_,_,stacksize,offset) = subject_matter {
-            src = src_again(whole, stacksize,offset,&mut context.correspond);
+        let ptr = cond_stack as *const CondStack;
+        let subject_matter= push_exp(corre, corre_size, frame_stack, cond_stack);
+        unsafe {
+            let stack = std::mem::transmute::<*const CondStack, &CondStack>(ptr);
+            print_structure(&subject_matter,stack,frame_stack.last_mut().unwrap());
         }
         if let PopSubjectMatter::Donot = subject_matter {
             continue;
         }
         let frame = frame_stack.last_mut().unwrap();
+        if let PopSubjectMatter::PrAgain(_,_,stacksize,offset) = subject_matter {
+            println!("<<<<<<<<<<<< src again back to: {offset}, stacksize: {stacksize}");
+            src = src_again(whole, stacksize,offset,&mut context.correspond);
+        }
         if let None = decide_todo(subject_matter, &context.fn_codes,&mut context.symbols,frame) {
             continue;
         }
@@ -1519,7 +1573,7 @@ const fn is_sym_start(c:&char)->bool {
     }
     // UPPER_CHARS.contains(&c) || LOWER_CHARS.contains(&c)
 }
-fn token_next<'a>(src:&'a[char], frame_empty:bool,codes:&FnCodeMap)->Option<(Token,&'a[char])> {
+fn token_next<'a>(src:&'a[char], sign_number:bool, codes:&FnCodeMap)->Option<(Token,&'a[char])> {
     // skip ignored char
     let (src,Some(ref c)) = skip_blank(src) else {
         return Some((Token::Exit(Exit),src));
@@ -1527,7 +1581,7 @@ fn token_next<'a>(src:&'a[char], frame_empty:bool,codes:&FnCodeMap)->Option<(Tok
 
     // 处理 开始的正负号，先不以单目运算符进行解析
     // the first + - maybe is number if next char is in 0-9
-    if frame_empty {
+    if sign_number {
         if let '+'|'-' = c {
             if let Some(DIGITS!()) = src.get(1) {
                 if let Some((ni,_deci,_w,src_rest)) = parse_number(src) {
@@ -1537,7 +1591,7 @@ fn token_next<'a>(src:&'a[char], frame_empty:bool,codes:&FnCodeMap)->Option<(Tok
     // <1> 12345.0123
     if DIGITS.contains(c) {
         if let Some((ni,_deci,_w,src_rest)) = parse_number(src) {
-            println!("number parsed is {ni}+({_deci}/{_w}) = {}", ni as f32 + _deci as f32/_w as f32);
+            // println!("number parsed is {ni}+({_deci}/{_w}) = {}", ni as f32 + _deci as f32/_w as f32);
             return Some((Token::Data(Data::Val(Et::I32(ni))),src_rest));
         }
     // ; ,
@@ -1666,8 +1720,13 @@ fn ast_correspond(token:Token, whole:&[char], src:&[char], correspond:&mut Corre
     //     }
     //     _ => (),
     // }
+
+    // if exp is at the first pos, we flag it
+    let mut start_new_exp = false;
+
     let ce = match token {
         Token::Pr(Bracket::LRound) => {
+            start_new_exp = true;
             correspond.push(CorreE::Sub(Bracket::LRound));
             CorreE::Sub(Bracket::LRound)
         }
@@ -1682,10 +1741,12 @@ fn ast_correspond(token:Token, whole:&[char], src:&[char], correspond:&mut Corre
         }
 
         Token::Aux(Aux::Semicolon) => {
+            start_new_exp = true;
             CorreE::Aux(Aux::Semicolon)
         } // ignore
 
         Token::Aux(Aux::Comma) => {
+            start_new_exp = true;
             // let mut is_fndef_end = false; // not need anymore in 1.82
             match correspond.last() {
                 // fn def complete
@@ -1725,18 +1786,21 @@ fn ast_correspond(token:Token, whole:&[char], src:&[char], correspond:&mut Corre
         }
 
         Token::Fndecl(name,ps) => {
+            start_new_exp = true;
             correspond.push(CorreE::Fnast(Fnast::Decl(name, ps, src.len())));
             correspond.push_fndef();
             CorreE::IgnoreNextSteps
         }
 
         Token::Kw(Keyword::If) => {
+            start_new_exp = true;
             correspond.push(CorreE::Ifc(Ifflow::If));
             // correspond.push_fndef(correspond.is_fndef());
             // correspond.push_condition(false);
             CorreE::Ifc(Ifflow::If) // we start a sub, use this
         }
         Token::Kw(Keyword::Then) => {
+            start_new_exp = true;
             match correspond.last() {
                 Some(CorreE::Ifc(Ifflow::If|Ifflow::Elif)) => {
                     correspond.update(CorreE::Ifc(Ifflow::Then));
@@ -1746,6 +1810,7 @@ fn ast_correspond(token:Token, whole:&[char], src:&[char], correspond:&mut Corre
             }
         }
         Token::Kw(Keyword::Elif) => {
+            start_new_exp = true;
             if let Some(CorreE::Ifc(Ifflow::Then)) = correspond.last() {
                 correspond.update(CorreE::Ifc(Ifflow::Elif));
                 // correspond.set_fndef(correspond.was_true());
@@ -1755,6 +1820,7 @@ fn ast_correspond(token:Token, whole:&[char], src:&[char], correspond:&mut Corre
             }
         }
         Token::Kw(Keyword::Else) => {
+            start_new_exp = true;
             match correspond.last() {
                 Some(CorreE::Ifc(Ifflow::Then)) => {
                     correspond.update(CorreE::Ifc(Ifflow::Else));
@@ -1793,6 +1859,7 @@ fn ast_correspond(token:Token, whole:&[char], src:&[char], correspond:&mut Corre
         }
 
         Token::Kw(Keyword::While) => {
+            start_new_exp = true;
             let stacksize = correspond.len()+1;
             let offset = whole.len()-src.len();
             let whilehead = Whileflow::While(stacksize,offset);
@@ -1803,6 +1870,7 @@ fn ast_correspond(token:Token, whole:&[char], src:&[char], correspond:&mut Corre
             CorreE::Whc(whilehead)
         }
         Token::Curly(Curly::LCurly) => {
+            start_new_exp = true;
             match correspond.last() {
                 Some(CorreE::Whc(Whileflow::While(..))) => {
                     correspond.update(CorreE::Whc(Whileflow::Body(Bound::Begin)));
@@ -1821,6 +1889,7 @@ fn ast_correspond(token:Token, whole:&[char], src:&[char], correspond:&mut Corre
             }
         }
         Token::Kw(Keyword::Continue) => {
+            start_new_exp = true;
             match correspond.last() {
                 Some(CorreE::Whc(Whileflow::Body(Bound::Begin))) => {
                     // correspond.pop(CorreE::Whc(Whileflow::Body(Bound::End)));
@@ -1840,6 +1909,7 @@ fn ast_correspond(token:Token, whole:&[char], src:&[char], correspond:&mut Corre
             }
         }
         Token::Kw(Keyword::Break) => {
+            start_new_exp = true;
             match correspond.last() {
                 Some(CorreE::Whc(Whileflow::Body(Bound::Begin))) => {
                     correspond.update(CorreE::Whc(Whileflow::Break(LeadBound::Begin)));
@@ -1927,7 +1997,8 @@ fn ast_correspond(token:Token, whole:&[char], src:&[char], correspond:&mut Corre
         //     unimplemented!();
         // }
     };
-    println!("@@@ AST {:?}",correspond);
+    // println!("@@@ AST {:?}",correspond);
+    correspond.exp_start = start_new_exp;
     if correspond.is_fndef() {
         Some(CorreE::IgnoreNextSteps)
     } else {
@@ -1953,11 +2024,12 @@ enum Indication {
 // enum AndTodoNext {
 //     TrueDo, FalseDo,
 // }
+#[derive(Debug)]
 enum PopSubjectMatter<'a> {
     Op(Opi,Para),
     Pr(PriNum,RetRule),
-    Again(PriNum,RetRule,usize,usize), // offset
-    PrAndDo(PriNum,RetRule,fn(bool,&mut FlowBool),&'a mut FlowBool),
+    PrCond(PriNum,RetRule,fn(bool,&mut FlowBool),&'a mut FlowBool),
+    PrAgain(PriNum,RetRule,usize,usize), // offset
     // ConditionCalc(PriNum),
     // BreakCalc(PriNum),
     Donot,
@@ -1981,57 +2053,87 @@ fn do_if_else(cond:bool, flowbool:& mut FlowBool) {
 
 fn do_if_ast_null(_cond:bool, _flowbool:& mut FlowBool) {
 }
-fn do_while_ast_cond<'a>(cond:bool, flowbool:&'a mut FlowBool) {
-    let FlowBool::While(WhileState::Cond(cond_this@true),..) = flowbool else {
+fn do_while_body<'a>(cond:bool, flowbool:&'a mut FlowBool) {
+    let FlowBool::While(whilestate@WhileState::While1,..) = flowbool else {
         panic!("the grammmer error");
     };
-    if !cond {
-        *cond_this = false;
+    if cond {
+        *whilestate = WhileState::BodyDo;
+    } else {
+        *whilestate = WhileState::BodyDonot;
     }
 }
 
 fn push_exp<'a>(corre:CorreE, corre_size: usize,frame_stack: &mut FrameVec, cond_stack: &'a mut CondStack)->PopSubjectMatter<'a> {
     match cond_stack.last() {
-        Some(FlowBool::If(IfState::If0)) => {}
-        Some(FlowBool::If(IfState::ThenDo)) => {}
-        Some(FlowBool::If(IfState::ThenDone)) => {
-            if let CorreE::Ifc(Ifflow::End) = corre {
-                cond_stack.pop();
-            }
-            return PopSubjectMatter::Donot;
-        }
-        Some(FlowBool::If(IfState::ThenDonot)) => {
-            match corre {
-                CorreE::Ifc(Ifflow::End) => {
-                    cond_stack.pop();
+        Some(FlowBool::If(ifstate)) => {
+            match ifstate {
+                IfState::If0|IfState::ThenDo|IfState::ElseDo
+                    => {}
+                IfState::ThenDone => {
+                    if let CorreE::Ifc(Ifflow::End) = corre {
+                        cond_stack.pop();
+                    }
+                    return PopSubjectMatter::Donot;
                 }
-                CorreE::Ifc(Ifflow::Else) => {
-                    cond_stack.update_if(IfState::ElseDo);
+                IfState::ThenDonot => {
+                    match corre {
+                        CorreE::Ifc(Ifflow::End) => {
+                            cond_stack.pop();
+                        }
+                        CorreE::Ifc(Ifflow::Else) => {
+                            cond_stack.update_if(IfState::ElseDo);
+                        }
+                        CorreE::Ifc(Ifflow::Elif) => {
+                            cond_stack.update_if(IfState::If0);
+                        }
+                        _=>{}
+                    }
+                    return PopSubjectMatter::Donot;
                 }
-                CorreE::Ifc(Ifflow::Elif) => {
-                    cond_stack.update_if(IfState::If0);
+                IfState::ElseDonot => {
+                    if let CorreE::Ifc(Ifflow::End) = corre {
+                        cond_stack.pop();
+                    }
+                    return  PopSubjectMatter::Donot;
                 }
-                _=>{}
+                // IfState::ElseDone => {}
             }
-            return PopSubjectMatter::Donot;
         }
-        Some(FlowBool::If(IfState::ElseDo)) => {}
-        Some(FlowBool::If(IfState::ElseDonot)) => {
-            if let CorreE::Ifc(Ifflow::End) = corre {
-                cond_stack.pop();
-            }
-            return  PopSubjectMatter::Donot;
-        }
-        _=>{}
-    }
-
-    if let Some(FlowBool::While(state, stacksize, _offset)) = cond_stack.last() {
-        match state {
-            WhileState::Cond(true) => {debug_assert!(true,"do next");}
-            WhileState::Else => {debug_assert!(true,"do next");}
-            WhileState::Cond(false) => {
-                match corre_size.cmp(stacksize) {
-                    std::cmp::Ordering::Less => {
+        Some(FlowBool::While(whilestate, stacksize, _offset)) => {
+            match whilestate {
+                WhileState::While1 => {debug_assert!(true,"do next");}
+                WhileState::BodyDo => {debug_assert!(true,"do next");}
+                WhileState::ElseDo => {debug_assert!(true,"do next");}
+                WhileState::BodyDonot => {
+                    match corre_size.cmp(stacksize) {
+                        std::cmp::Ordering::Less => {
+                            debug_assert!(corre_size+1==*stacksize);
+                            debug_assert!(matches!(corre,
+                                CorreE::Whc(Whileflow::Body(Bound::End))|
+                                CorreE::Whc(Whileflow::Else(LeadBound::End))
+                            ));
+                            cond_stack.pop();
+                            return PopSubjectMatter::Pr(Whileflow::WHILE_END_PRINUM, RetRule::Ignore);
+                        }
+                        std::cmp::Ordering::Equal => {
+                            match corre {
+                                CorreE::Whc(Whileflow::Body(Bound::End)) |
+                                CorreE::Whc(Whileflow::Else(LeadBound::Head)) =>
+                                    return PopSubjectMatter::Donot,
+                                CorreE::Whc(Whileflow::Else(LeadBound::Begin)) =>
+                                    cond_stack.update_while(WhileState::ElseDo),
+                                _=> return PopSubjectMatter::Donot,
+                            }
+                        }
+                        std::cmp::Ordering::Greater => {
+                            return PopSubjectMatter::Donot;
+                        }
+                    }
+                }
+                WhileState::BreakDone => {
+                    if corre_size < *stacksize {
+                        // While-End
                         debug_assert!(corre_size+1==*stacksize);
                         debug_assert!(matches!(corre,
                             CorreE::Whc(Whileflow::Body(Bound::End))|
@@ -2039,36 +2141,13 @@ fn push_exp<'a>(corre:CorreE, corre_size: usize,frame_stack: &mut FrameVec, cond
                         ));
                         cond_stack.pop();
                         return PopSubjectMatter::Pr(Whileflow::WHILE_END_PRINUM, RetRule::Ignore);
-                    }
-                    std::cmp::Ordering::Equal => {
-                        match corre {
-                            CorreE::Whc(Whileflow::Body(Bound::End)) |
-                            CorreE::Whc(Whileflow::Else(LeadBound::Head)) =>
-                                return PopSubjectMatter::Donot,
-                            CorreE::Whc(Whileflow::Else(LeadBound::Begin)) =>
-                                cond_stack.update_while(WhileState::Else),
-                            _=> unreachable!("grammer error"),
-                        }
-                    }
-                    std::cmp::Ordering::Greater => {
+                    } else {
                         return PopSubjectMatter::Donot;
                     }
                 }
             }
-            WhileState::Break => {
-                if corre_size < *stacksize {
-                    debug_assert!(corre_size+1==*stacksize);
-                    debug_assert!(matches!(corre,
-                        CorreE::Whc(Whileflow::Body(Bound::End))|
-                        CorreE::Whc(Whileflow::Else(LeadBound::End))
-                    ));
-                    cond_stack.pop();
-                    return PopSubjectMatter::Pr(Whileflow::WHILE_END_PRINUM, RetRule::Ignore);
-                } else {
-                    return PopSubjectMatter::Donot;
-                }
-            }
         }
+        None => {}
     }
 
     match corre {
@@ -2085,14 +2164,14 @@ fn push_exp<'a>(corre:CorreE, corre_size: usize,frame_stack: &mut FrameVec, cond
             let Some(flowbool) = cond_stack.last_mut() else {
                 unreachable!("internal error");
             };
-            PopSubjectMatter::PrAndDo(Ifflow::INNER_PRINUM,RetRule::Ignore,do_if_then,flowbool)
+            PopSubjectMatter::PrCond(Ifflow::INNER_PRINUM,RetRule::Ignore,do_if_then,flowbool)
         }
         CorreE::Ifc(Ifflow::Ifelse) => {
             debug_assert!(matches!(cond_stack.last(),Some(FlowBool::If(IfState::If0))));
             let Some(flowbool) = cond_stack.last_mut() else {
                 unreachable!("internal error");
             };
-            PopSubjectMatter::PrAndDo(Ifflow::INNER_PRINUM,RetRule::Ignore,do_if_else,flowbool)
+            PopSubjectMatter::PrCond(Ifflow::INNER_PRINUM,RetRule::Ignore,do_if_else,flowbool)
         }
         CorreE::Ifc(Ifflow::Else) => {
             //1
@@ -2110,47 +2189,49 @@ fn push_exp<'a>(corre:CorreE, corre_size: usize,frame_stack: &mut FrameVec, cond
             //1
             debug_assert!(matches!(cond_stack.last_mut(),Some(FlowBool::If(IfState::ThenDo|IfState::ElseDo))));
             cond_stack.update_if(IfState::ThenDone);
-            cond_stack.update_if(IfState::ElseDone);
+            // cond_stack.update_if(IfState::ElseDone);
             cond_stack.pop(); // the cond of if is done
             PopSubjectMatter::Pr(Ifflow::END_PRINUM, RetRule::Ignore)
         }
 
+        // while running structure
         CorreE::Whc(Whileflow::While(stacksize,offset)) => {
             let _ = push_frame(frame_stack);
-            cond_stack.push(FlowBool::While(WhileState::Cond(true),stacksize,offset));
+            cond_stack.push(FlowBool::While(WhileState::While1,stacksize,offset));
             PopSubjectMatter::Pr(Whileflow::WHILE_BEGIN_PRINUM, RetRule::Ignore)
         }
         CorreE::Whc(Whileflow::Body(Bound::Begin)) => {
             let flowbool = cond_stack.last_mut().unwrap();
-            debug_assert!(matches!(flowbool,FlowBool::While(WhileState::Cond(true),..)));
-            PopSubjectMatter::PrAndDo(Whileflow::BODY_BEGIN_PRINUM,RetRule::Ignore,do_while_ast_cond,flowbool)
+            debug_assert!(matches!(flowbool,FlowBool::While(WhileState::While1,..)));
+            PopSubjectMatter::PrCond(Whileflow::BODY_BEGIN_PRINUM,RetRule::Ignore,do_while_body,flowbool)
         }
         CorreE::Whc(Whileflow::Body(Bound::End)) => {
             debug_assert!({
-                let Some(FlowBool::While(WhileState::Cond(true),stacksize,offset)) = cond_stack.last() else {
+                let Some(FlowBool::While(WhileState::BodyDo,stacksize,_offset)) = cond_stack.last() else {
                     unreachable!("grammer error");
                 };
                 corre_size == *stacksize || corre_size+1 == *stacksize
             });
+            cond_stack.update_while(WhileState::While1);
             let Some(FlowBool::While(..,stacksize,offset)) = cond_stack.last() else {
                 unreachable!("never will be happen here");
             };
-            PopSubjectMatter::Again(Whileflow::BODY_END_PRINUM,RetRule::Ignore,*stacksize,*offset)
+            PopSubjectMatter::PrAgain(Whileflow::BODY_END_PRINUM,RetRule::Ignore,*stacksize,*offset)
         }
         CorreE::Whc(Whileflow::Continue) => {
             match cond_stack.last().unwrap() {
-                FlowBool::While(WhileState::Cond(cond@true),stacksize,offset) => {
-                    PopSubjectMatter::Again(Whileflow::BODY_END_PRINUM,RetRule::Ignore,*stacksize,*offset)
+                FlowBool::While(WhileState::BodyDo,stacksize,offset) => {
+                    PopSubjectMatter::PrAgain(Whileflow::BODY_END_PRINUM,RetRule::Ignore,*stacksize,*offset)
                 }
                 FlowBool::If(IfState::ThenDo|IfState::ElseDo) => {
                     while let Some(FlowBool::If(ifstate)) = cond_stack.last() {
                         debug_assert!(matches!(ifstate,IfState::ThenDo|IfState::ElseDo));
                         cond_stack.pop();
                     }
-                    let Some(FlowBool::While(WhileState::Cond(true),stacksize,offset)) = cond_stack.last() else {
-                        unreachable!("never reache here");
+                    let Some(FlowBool::While(WhileState::BodyDo,stacksize,offset)) = cond_stack.last() else {
+                        unreachable!("never reach here");
                     };
-                    PopSubjectMatter::Again(Whileflow::BODY_END_PRINUM,RetRule::Ignore,*stacksize,*offset)
+                    PopSubjectMatter::PrAgain(Whileflow::BODY_END_PRINUM,RetRule::Ignore,*stacksize,*offset)
                 }
                 _=> unimplemented!("grammer error")
             }
@@ -2160,7 +2241,8 @@ fn push_exp<'a>(corre:CorreE, corre_size: usize,frame_stack: &mut FrameVec, cond
         }
         CorreE::Whc(Whileflow::Break(LeadBound::End)) => {
             match cond_stack.last().unwrap() {
-                FlowBool::While(WhileState::Cond(_cond@true),..) => {
+                FlowBool::While(WhileState::BodyDo|WhileState::ElseDo,..) => {
+                    cond_stack.update_while(WhileState::BreakDone);
                     PopSubjectMatter::Donot
                 }
                 FlowBool::If(IfState::ThenDo|IfState::ElseDo) => {
@@ -2168,8 +2250,8 @@ fn push_exp<'a>(corre:CorreE, corre_size: usize,frame_stack: &mut FrameVec, cond
                         debug_assert!(matches!(ifstate,IfState::ThenDo|IfState::ElseDo));
                         cond_stack.pop();
                     }
-                    debug_assert!(matches!(cond_stack.last(),Some(FlowBool::While(WhileState::Cond(true),..))));
-                    // PopSubjectMatter::Pr(Whileflow::BODY_END_PRINUM,RetRule::Ignore)
+                    debug_assert!(matches!(cond_stack.last(),
+                        Some(FlowBool::While(WhileState::BodyDo|WhileState::ElseDo,..))));
                     PopSubjectMatter::Donot // do the action when meet the while-end
                 }
                 _=> unreachable!("the program internal error")
@@ -2181,7 +2263,7 @@ fn push_exp<'a>(corre:CorreE, corre_size: usize,frame_stack: &mut FrameVec, cond
         }
         CorreE::Whc(Whileflow::Else(LeadBound::End)) => {
             debug_assert!({
-                let Some(FlowBool::While(WhileState::Cond(false), stacksize, _offset)) = cond_stack.last() else {
+                let Some(FlowBool::While(WhileState::ElseDo, stacksize, _offset)) = cond_stack.last() else {
                     panic!("program internal error");
                 };
                 corre_size+1 == *stacksize
@@ -2241,10 +2323,29 @@ enum AndTodo {
     BreakBack, // donot need the break value, just store in the frame, get the value at the while-end
 }
 fn src_again<'a>(whole:&'a[char], stacksize:usize,offset:usize,correspond:&mut CorrespondVec)->&'a[char] {
-    correspond.push(CorreE::Whc(Whileflow::While(stacksize,offset)));
+    match correspond.len().cmp(&stacksize) {
+        std::cmp::Ordering::Less =>
+            correspond.push(CorreE::Whc(Whileflow::While(stacksize,offset))),
+        std::cmp::Ordering::Equal =>
+            correspond.update(CorreE::Whc(Whileflow::While(stacksize,offset))),
+        std::cmp::Ordering::Greater =>
+            unreachable!("internal error"),
+    }
+    debug_assert_eq!(stacksize,correspond.len());
     &whole[offset..]
 }
 fn decide_todo(subject_matter:PopSubjectMatter,codes:&FnCodeMap,symbols:&mut SymbolMap, frame: &mut Frame)->Option<()> {
+    // the two functions just use in this function
+    fn pop_last_and_clear(stack: &mut Vec<Data>, symbols:&SymbolMap)->Et {
+        let data = stack.pop().unwrap();
+        stack.clear();
+        value_of(symbols, &data)
+    }
+    fn clear_data(frame:&mut Frame) {
+        debug_assert!(frame.opi.is_empty());
+        frame.data.clear();
+    }
+
     match subject_matter {
         PopSubjectMatter::Op(op, param) => {
             let cause = (op.prinum,RetRule::Ignore);
@@ -2252,20 +2353,25 @@ fn decide_todo(subject_matter:PopSubjectMatter,codes:&FnCodeMap,symbols:&mut Sym
             frame.opi.push((op,param));
             None
         },
-        PopSubjectMatter::Pr(prinum,retrule)|
-        PopSubjectMatter::Again(prinum,retrule,..) => {
+        PopSubjectMatter::Pr(prinum,retrule) =>{
             let cause = (prinum,retrule);
             try_pop_exp_util(codes,symbols,frame,cause);
             // P0 means the end of the program
             if let PriNum::P0|PriNum::P1 = prinum {Some(())} else {None}
         }
-        PopSubjectMatter::PrAndDo(prinum, retrule, act,flowbool) => {
+        PopSubjectMatter::PrCond(prinum, retrule, act,flowbool) => {
             debug_assert_eq!(prinum,PriNum::P2);
             let cause = (prinum,retrule);
             try_pop_exp_util(codes,symbols,frame,cause);
             let data_bool = pop_last_and_clear(&mut frame.data, symbols).as_bool();
             act(data_bool,flowbool);
             None
+        }
+        PopSubjectMatter::PrAgain(prinum,_retrule,..) => {
+            let cause = (prinum,RetRule::Ignore);
+            try_pop_exp_util(codes,symbols,frame,cause);
+            clear_data(frame);
+            if let PriNum::P0|PriNum::P1 = prinum {Some(())} else {None}
         }
         PopSubjectMatter::Donot => None, // do nothing
     }
@@ -2385,11 +2491,6 @@ fn pop_exp(codes:&FnCodeMap,symbol:&mut SymbolMap,frame: &mut Frame, retrule:Ret
 }
 
 // if I clear all but keep the last, added here
-fn pop_last_and_clear(stack: &mut Vec<Data>, symbols:&SymbolMap)->Et {
-    let data = stack.pop().unwrap();
-    stack.clear();
-    value_of(symbols, &data)
-}
 
 fn push_data(v:Data, stack: &mut Vec<Data>) {
     println!("\t++++ push data {v:?}");
@@ -2408,6 +2509,7 @@ impl CorrespondVec {
         Self {
             corre_stack: Vec::new(),
             fndef_stack: 0,
+            exp_start: true,
             // offset_stack: Vec::new(),
             // condition_stack: Vec::new(),
             // relocate_offset: None,
@@ -2420,19 +2522,19 @@ impl CorrespondVec {
         self.corre_stack.last()
     }
     fn push(&mut self,corre:CorreE) {
-        println!("+++ AST: {corre:?}");
+        // println!("+++ AST: {corre:?}");
         self.corre_stack.push(corre);
     }
     fn pop(&mut self,cause:CorreE) {
         let v = self.corre_stack.pop();
         assert!(v.is_some());
-        println!("--- AST: {v:?} due to {cause:?}");
+        // println!("--- AST: {v:?} due to {cause:?}");
     }
     fn update(&mut self,corre:CorreE) {
         let Some(old) = self.corre_stack.last_mut() else {
             unreachable!("no items");
         };
-        println!("*** AST: {corre:?}  old: {:?}",*old);
+        // println!("*** AST: {corre:?}  old: {:?}",*old);
         *old = corre;
     }
     // fn update_and_prev(&mut self,corre:CorreE)->&CorreE {
@@ -2456,6 +2558,12 @@ impl CorrespondVec {
         // self.fndef_stack.pop().unwrap();
         debug_assert!(self.fndef_stack>0);
         self.fndef_stack -= 1;
+    }
+    const fn exp_start(&self)->bool {
+        self.exp_start
+    }
+    fn set_exp_start(&mut self) {
+        self.exp_start = true;
     }
     // fn push_offset(&mut self,offset:usize) {
     //     self.offset_stack.push(offset);
@@ -2597,12 +2705,12 @@ impl CondStack {
     }
 }
 fn push_frame(frame_stack: &mut FrameVec)->&mut Frame {
-    println!("(---> begin a new frame");
+    println!("(\n(----------> begin a new frame\n(");
     frame_stack.push(Frame::new());
     frame_stack.last_mut().unwrap()
 }
 fn pop_frame(frame_stack: &mut FrameVec)->Option<Frame> {
-    println!(")<--- end a frame");
+    println!(")\n)<---------- end a frame\n)");
     frame_stack.pop()
 }
 /* fn n x y = x+y, */
@@ -2650,19 +2758,36 @@ impl std::ops::DerefMut for CondBool {
         &mut self.0
     }
 }
+/// while state machine
+/// which control the flow of while loop flow run as its design
+/// this value is not belonged to user-code just inner state
+/// includes all kinds of flags such while body continue break else etc..
+#[derive(Debug)]
 enum WhileState {
-    Cond(bool),
+    // Cond(bool),
+    While1,
+    BodyDo,
+    BreakDone,
+    BodyDonot,
+    ElseDo,
+    // End,
     // True,
     // False,
-    Break,
-    Else,
+    // Break,
+    // Else,
 }
+/// if state machine
+/// which control the flow of if branch flow run as its design
+/// this value is not belonged to user-code just inner state
+/// includes all kinds of flags such if then else etc..
+#[derive(Debug)]
 enum IfState {
     If0,
     ThenDo,ThenDone,ThenDonot,
-    ElseDo,ElseDone,ElseDonot,
+    ElseDo,/*ElseDone,*/ElseDonot,
     /*End,*/
 }
+#[derive(Debug)]
 enum FlowBool {
     // while-state, stack-size, offset
     While(WhileState,usize,usize),
@@ -2673,6 +2798,7 @@ enum FlowBool {
 //     break_size: usize,
 // }
 // type CondStack = Vec<FlowBool>;
+#[derive(Debug)]
 struct CondStack {
     cond_stack: Vec<FlowBool>,
     // break_info: BreakInfo,
@@ -2683,6 +2809,7 @@ struct CondStack {
 struct CorrespondVec {
     corre_stack: Vec<CorreE>,
     fndef_stack: FndefStack,
+    exp_start: bool,
     // offset_stack: Vec<usize>,
     // condition_stack: Condition,
     // relocate_offset: Option<usize>,
